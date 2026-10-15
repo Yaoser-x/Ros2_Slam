@@ -552,6 +552,8 @@ def ros_parameters(config: Mapping[str, Any]) -> dict[str, Any]:
                 "navigation_guard_state_topic": topics["navigation_guard_state"],
                 "require_motion_supervision": True,
                 "supervision_timeout_sec": timing["status_timeout_sec"],
+                "compatibility_state_topic": topics["platform_compatibility_state"],
+                "compatibility_timeout_sec": timing["status_timeout_sec"],
                 "rearm_quiet_sec": timing["mux_source_timeout_sec"],
                 "rearm_disable_retry_sec": timing["host_publish_period_sec"],
             }

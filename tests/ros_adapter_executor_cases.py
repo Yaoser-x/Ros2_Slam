@@ -6,7 +6,7 @@ import uuid
 
 import rclpy
 from action_msgs.msg import GoalStatus
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Twist
 from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import Odometry
 from rclpy.action import ActionClient, ActionServer, CancelResponse
@@ -30,6 +30,7 @@ from std_srvs.srv import SetBool, Trigger
 
 from robot_chassis_ops.chassis_ops_node import ChassisOpsNode
 from robot_control.cmd_vel_mux import CmdVelMuxNode
+from robot_config.compatibility_node import PlatformCompatibilityNode
 from robot_navigation_guard.navigation_guard_node import NavigationGuardNode
 from robot_state_estimation.formal_odometry_node import FormalOdometryNode
 from robot_supervision.motion_supervisor_node import MotionSupervisorNode
@@ -263,7 +264,7 @@ def navigation_pose(executor, nodes):
 
 def rearm_late_subscriber(executor, nodes):
     mux, supervisor, fixture = CmdVelMuxNode(), MotionSupervisorNode(), Node("fixture")
-    nodes.extend([mux, supervisor, fixture])
+    nodes.extend([mux, supervisor, fixture, PlatformCompatibilityNode()])
     commands = []
     fixture.create_subscription(
         HostMotionCommand, "chassis/host_motion_command", lambda msg: commands.append(msg), 10
@@ -323,6 +324,46 @@ def rearm_late_subscriber(executor, nodes):
     assert mux.sequence == sequence, "wire readiness must stop the disable retry"
     assert mux.rearm_required and not mux.last_active and not fake.enabled
     assert supervisor.last_command is not None and not supervisor.last_command.enable
+
+
+def compatibility_process_loss(executor, nodes):
+    mux, supervisor, fake = CmdVelMuxNode(), MotionSupervisorNode(), FakeBaseNode()
+    compatibility, fixture = PlatformCompatibilityNode(), Node("fixture")
+    nodes.extend([mux, supervisor, fake, compatibility, fixture])
+    for node in nodes:
+        executor.add_node(node)
+    spin_until(executor, lambda: mux.gate_state == HostControlState.STATE_WAIT_FRESH_HOST_INTENT)
+    source = fixture.create_publisher(Twist, "cmd_vel/test", 10)
+    keep_publishing = [True]
+
+    def publish():
+        if keep_publishing[0]:
+            command = Twist()
+            command.linear.x = 0.05
+            source.publish(command)
+
+    timer = fixture.create_timer(0.05, publish)
+    spin_until(executor, lambda: mux.last_active and fake.enabled)
+    lost_at = time.monotonic()
+    executor.remove_node(compatibility)
+    compatibility.destroy_node()
+    nodes.remove(compatibility)
+    spin_until(executor, lambda: mux.rearm_required and not mux.last_active and not fake.enabled)
+    assert time.monotonic() - lost_at < 0.8
+    assert mux.rearm_reason_flags & HostControlState.REARM_PROTOCOL_INCOMPATIBLE
+    replacement = PlatformCompatibilityNode()
+    nodes.append(replacement)
+    executor.add_node(replacement)
+    spin_for(executor, 0.4)
+    assert (
+        mux.rearm_required and not fake.enabled
+    ), "node recovery must not replay an ongoing old source"
+    keep_publishing[0] = False
+    spin_until(executor, lambda: mux.gate_state == HostControlState.STATE_WAIT_FRESH_HOST_INTENT)
+    assert not fake.enabled
+    keep_publishing[0] = True
+    spin_until(executor, lambda: mux.last_active and fake.enabled)
+    fixture.destroy_timer(timer)
 
 
 def operations(executor, nodes):

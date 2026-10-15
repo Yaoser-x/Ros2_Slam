@@ -72,6 +72,7 @@ class _FakeHostControlState:
     REARM_TRANSPORT = 1
     REARM_MOTION_CRITICAL = 128
     REARM_SUPERVISION_STALE = 256
+    REARM_PROTOCOL_INCOMPATIBLE = 512
 
     def __init__(self):
         self.header = SimpleNamespace(stamp=None)
@@ -91,12 +92,18 @@ class _FakeNavigationGuardState:
     STATE_ACTIVE = 4
 
 
+class _FakePlatformCompatibilityState:
+    STATE_COMPATIBLE = 1
+    STATE_SIMULATION = 2
+
+
 _mock_robot_interfaces_msg = MagicMock()
 _mock_robot_interfaces_msg.HostMotionCommand = _FakeHostMotionCommand
 _mock_robot_interfaces_msg.ChassisLinkState = _FakeChassisLinkState
 _mock_robot_interfaces_msg.HostControlState = _FakeHostControlState
 _mock_robot_interfaces_msg.MotionSupervisionState = _FakeMotionSupervisionState
 _mock_robot_interfaces_msg.NavigationGuardState = _FakeNavigationGuardState
+_mock_robot_interfaces_msg.PlatformCompatibilityState = _FakePlatformCompatibilityState
 sys.modules["robot_interfaces"] = MagicMock()
 sys.modules["robot_interfaces.msg"] = _mock_robot_interfaces_msg
 
@@ -193,6 +200,9 @@ def make_mux(**param_overrides):
     node.rearm_reason_flags = 0
     node.wire_ready = True
     node.gate_state = _FakeHostControlState.STATE_WAIT_FRESH_HOST_INTENT
+    # These unit cases isolate other gates; dedicated cases below exercise the
+    # actual compatibility lease, and executor cases use the real publisher.
+    node._compatibility_fresh = lambda _now: True
     set_navigation_guard(node, generation=1)
     return node
 
@@ -204,6 +214,66 @@ def set_navigation_guard(node, generation=1, *, active=True):
             goal_generation=generation,
         )
     )
+
+
+def compatibility_fixture(node, *, session=7, stamp=0.0, state=1, permit=True):
+    node._compatibility_fresh = CmdVelMuxNode._compatibility_fresh.__get__(node)
+    node.last_wire_session_id = 7
+    message = SimpleNamespace(
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=int(stamp), nanosec=int((stamp - int(stamp)) * 1e9))
+        ),
+        wire_session_id=session,
+        observation_session_id=session,
+        observation_ready=True,
+        state=state,
+        permit_formal_odometry=permit,
+    )
+    node._on_compatibility(message)
+    return message
+
+
+def test_compatibility_expiry_releases_active_command_and_discards_old_intent():
+    node = make_mux()
+    compatibility_fixture(node)
+    request = SimpleNamespace(linear=SimpleNamespace(x=0.05), angular=SimpleNamespace(z=0.0))
+    node._make_callback("test")(request)
+    assert node.last_active
+    node.get_clock().now.return_value.nanoseconds = int(0.251e9)
+    node._publish_selected()
+    assert not node.last_active and node.rearm_required
+    assert node.rearm_reason_flags & _FakeHostControlState.REARM_PROTOCOL_INCOMPATIBLE
+    assert not node.mux.select(0.251).active
+    assert not node.publisher.publish.call_args[0][0].enable
+    compatibility_fixture(node, stamp=0.251)
+    node._publish_selected()
+    assert node.rearm_required and not node.last_active
+
+
+@pytest.mark.parametrize(
+    "session,stamp,state,permit",
+    [
+        (8, 0.0, 1, True),
+        (7, -1.0, 1, True),
+        (7, 0.0, 3, False),
+        (7, 0.0, 1, False),
+    ],
+)
+def test_compatibility_rejects_other_session_retained_old_or_unlicensed_state(
+    session, stamp, state, permit
+):
+    node = make_mux()
+    compatibility_fixture(node, session=session, stamp=stamp, state=state, permit=permit)
+    assert not node._compatibility_fresh(0.0)
+    assert node.rearm_required
+
+
+def test_simulation_compatibility_is_explicit_and_still_bound_to_current_session():
+    node = make_mux()
+    compatibility_fixture(node, state=2, permit=False)
+    assert node._compatibility_fresh(0.0)
+    node.last_wire_session_id = 8
+    assert not node._compatibility_fresh(0.0)
 
 
 # ---------------------------------------------------------------------------

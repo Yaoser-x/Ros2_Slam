@@ -19,6 +19,7 @@ from robot_interfaces.msg import (
     HostMotionCommand,
     MotionSupervisionState,
     NavigationGuardState,
+    PlatformCompatibilityState,
 )
 
 from robot_control.control_policy import (
@@ -89,6 +90,8 @@ class CmdVelMuxNode(Node):
         self.declare_parameter("nav_guard_timeout_sec", 0.25)
         self.declare_parameter("require_motion_supervision", True)
         self.declare_parameter("supervision_timeout_sec", 0.25)
+        self.declare_parameter("compatibility_state_topic", "platform/compatibility_state")
+        self.declare_parameter("compatibility_timeout_sec", 0.25)
         self.declare_parameter("rearm_quiet_sec", 0.25)
         self.declare_parameter("rearm_disable_retry_sec", 0.05)
 
@@ -155,6 +158,11 @@ class CmdVelMuxNode(Node):
         self.config_sha256 = str(self.get_parameter("config_sha256").value)
         self.require_supervision = bool(self.get_parameter("require_motion_supervision").value)
         self.supervision_timeout = float(self.get_parameter("supervision_timeout_sec").value)
+        self.compatibility_timeout = float(self.get_parameter("compatibility_timeout_sec").value)
+        if not math.isfinite(self.compatibility_timeout) or self.compatibility_timeout <= 0.0:
+            raise ValueError("compatibility_timeout_sec must be finite and positive")
+        self.compatibility_at: Optional[float] = None
+        self.compatibility = None
         self.rearm_quiet_sec = float(self.get_parameter("rearm_quiet_sec").value)
         self.rearm_disable_retry_sec = float(self.get_parameter("rearm_disable_retry_sec").value)
         if not math.isfinite(self.rearm_disable_retry_sec) or self.rearm_disable_retry_sec <= 0.0:
@@ -192,6 +200,16 @@ class CmdVelMuxNode(Node):
                     use_default_callbacks=False,
                 ),
             )
+        self.create_subscription(
+            PlatformCompatibilityState,
+            str(self.get_parameter("compatibility_state_topic").value),
+            self._on_compatibility,
+            QoSProfile(
+                depth=1,
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            ),
+        )
         self.create_subscription(
             MotionSupervisionState,
             str(self.get_parameter("motion_supervision_topic").value),
@@ -280,6 +298,14 @@ class CmdVelMuxNode(Node):
 
     def _publish_selected(self) -> None:
         now_sec = self.monotonic_clock()
+        if not self._compatibility_fresh(now_sec):
+            self._latch_rearm(
+                HostControlState.REARM_PROTOCOL_INCOMPATIBLE,
+                HostControlState.REJECT_REARM_REQUIRED,
+            )
+            self._retry_rearm_disable(now_sec)
+            self._publish_control_state(now_sec)
+            return
         if not self._navigation_guard_fresh(now_sec):
             self.nav_active = False
             self.mux.clear_source("nav")
@@ -383,6 +409,40 @@ class CmdVelMuxNode(Node):
             )
         elif not self.rearm_required and not self.last_active:
             self.gate_state = HostControlState.STATE_WAIT_FRESH_HOST_INTENT
+
+    def _on_compatibility(self, msg: PlatformCompatibilityState) -> None:
+        sample_sec = int(msg.header.stamp.sec) + int(msg.header.stamp.nanosec) * 1e-9
+        age = self.get_clock().now().nanoseconds * 1e-9 - sample_sec
+        self.compatibility = msg
+        self.compatibility_at = (
+            self.monotonic_clock() - max(age, 0.0)
+            if math.isfinite(age) and -0.02 <= age <= self.compatibility_timeout
+            else None
+        )
+        if not self._compatibility_fresh(self.monotonic_clock()):
+            self._latch_rearm(
+                HostControlState.REARM_PROTOCOL_INCOMPATIBLE,
+                HostControlState.REJECT_REARM_REQUIRED,
+            )
+
+    def _compatibility_fresh(self, now_sec: float) -> bool:
+        state = self.compatibility
+        return bool(
+            state is not None
+            and self.compatibility_at is not None
+            and 0.0 <= now_sec - self.compatibility_at <= self.compatibility_timeout
+            and state.observation_ready
+            and self.last_wire_session_id != 0
+            and int(state.wire_session_id) == self.last_wire_session_id
+            and int(state.observation_session_id) == self.last_wire_session_id
+            and (
+                state.state == PlatformCompatibilityState.STATE_SIMULATION
+                or (
+                    state.state == PlatformCompatibilityState.STATE_COMPATIBLE
+                    and state.permit_formal_odometry
+                )
+            )
+        )
 
     def _on_chassis_state(self, msg: ChassisLinkState) -> None:
         wire_session = int(msg.wire_session_id)
