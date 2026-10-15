@@ -17,16 +17,18 @@ BASE_TEST_STOP_FIRST="${BASE_TEST_STOP_FIRST:-true}"
 BASE_TEST_COUNTDOWN="${BASE_TEST_COUNTDOWN:-5}"
 BASE_TEST_READY_TIMEOUT="${BASE_TEST_READY_TIMEOUT:-20}"
 BASE_TEST_LOG_DIR="${BASE_TEST_LOG_DIR:-/tmp/robot_base_test}"
+SUSPENDED_WHEEL="false"
 
 usage() {
     cat <<'EOF'
 Usage: bash test_base_cmd.sh [--fake-base|--real-base] [--base-port PORT]
-                           [--rotate-only|--with-linear|--calibrate-angular] [--no-stop-first]
+                           [--rotate-only|--with-linear|--calibrate-angular|--suspended-wheel] [--no-stop-first]
 
 Runs the complete robot_bringup base_only chain with ROBOT_EFFECTIVE_PARAMS.
 Checks current-session link, compatibility, Host rearm, supervision and fresh odometry before motion.
 The default is real base, rotate-only, 0.35 rad/s for 1.5 s; fake base never accesses a serial device.
 Every phase must have actual odometry execution evidence; missing/incorrect motion exits nonzero.
+--suspended-wheel runs the fixed low-speed sequence with raw-wheel stop evidence and a JSON report.
 EOF
 }
 
@@ -40,6 +42,7 @@ while [ $# -gt 0 ]; do
         --rotate-only) BASE_TEST_MODE="rotate"; shift ;;
         --with-linear) BASE_TEST_MODE="linear"; shift ;;
         --calibrate-angular) BASE_TEST_MODE="angular_sweep"; shift ;;
+        --suspended-wheel) SUSPENDED_WHEEL="true"; shift ;;
         --no-stop-first) BASE_TEST_STOP_FIRST="false"; shift ;;
         -h|--help) usage; exit 0 ;;
         *) log_error "unknown argument: $1"; usage; exit 1 ;;
@@ -47,6 +50,10 @@ while [ $# -gt 0 ]; do
 done
 
 case "$BASE_MODE" in real|fake) ;; *) log_error "base mode must be real or fake"; exit 1 ;; esac
+if [ "$SUSPENDED_WHEEL" = "true" ] && [ "$BASE_MODE" != "real" ]; then
+    log_error "suspended-wheel acceptance requires the real UART provider"
+    exit 2
+fi
 if [ "${BASE_TEST_CMD_TIMEOUT+x}" = x ] || [ "${BASE_TEST_KEEPALIVE+x}" = x ]; then
     log_error "BASE_TEST_CMD_TIMEOUT/BASE_TEST_KEEPALIVE are unsupported; use canonical compiled safety timing"
     exit 2
@@ -89,8 +96,9 @@ cleanup() {
     send_stop
     if [ -n "$LAUNCH_PID" ]; then
         # setsid makes the launch PID the leader of this test's private process group.
-        # Address that group even if the launcher exited and descendants remain alive.
-        kill -INT -- "-$LAUNCH_PID" 2>/dev/null || true
+        # ROS launch forwards SIGINT to its children. Signal its leader once;
+        # group signalling here would interrupt each child a second time.
+        kill -INT -- "$LAUNCH_PID" 2>/dev/null || true
         local attempt
         for ((attempt=0; attempt<20; attempt++)); do
             kill -0 -- "-$LAUNCH_PID" 2>/dev/null || break
@@ -137,6 +145,17 @@ fi
 if ! kill -0 "$LAUNCH_PID" 2>/dev/null; then
     log_error "base_only launch exited; see $LAUNCH_LOG"
     exit 1
+fi
+if [ "$SUSPENDED_WHEEL" = "true" ]; then
+    if ! python3 "${SCRIPT_DIR}/suspended_wheel_test_node.py" \
+            --report "${BASE_TEST_LOG_DIR}/suspended_${STAMP}.json" >"$CMD_LOG" 2>&1; then
+        log_error "suspended-wheel execution was not proven; see $CMD_LOG and $LAUNCH_LOG"
+        exit 1
+    fi
+    send_stop
+    log_success "Suspended-wheel ROS motion passed; interactive faults and ground acceptance remain separate."
+    printf 'Launch log: %s\nReady log: %s\nCommand log: %s\n' "$LAUNCH_LOG" "$READY_LOG" "$CMD_LOG"
+    exit 0
 fi
 if ! python3 "${SCRIPT_DIR}/base_cmd_test_node.py" --mode "$BASE_TEST_MODE" \
         --linear "$BASE_TEST_LINEAR" --angular "$BASE_TEST_ANGULAR" \

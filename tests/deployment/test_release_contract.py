@@ -9,7 +9,7 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[2]
-FIRMWARE_COMMIT = "bc472cc874e930aaed6eb8e7de73b41a2563dd85"
+FIRMWARE_COMMIT = "158254bd5c21f74a64f1d7c8609475a4c7caa1c7"
 
 
 def test_firmware_contract_pins_v3_candidate_and_remains_hil_blocked() -> None:
@@ -24,7 +24,9 @@ def test_firmware_contract_pins_v3_candidate_and_remains_hil_blocked() -> None:
     assert contract["upper"]["release"] == "v0.6.0-rc2"
     assert contract["upper"]["wire_protocols_supported"] == [3]
     assert contract["firmware"]["candidate_commit"] == FIRMWARE_COMMIT
-    assert contract["firmware"]["candidate_tag"] == "v1.0.0-rc1"
+    assert contract["firmware"]["candidate_tag"] is None
+    assert contract["firmware"]["parameter_crc32"] == 0x0D663E2A
+    assert contract["firmware"]["hardware_revision"] == 0x20000
     assert contract["firmware"]["tested_commit"] is None
     assert contract["firmware"]["compatible_commit"] is None
     vector_path = ROOT / contract["firmware"]["golden_vector_file"]

@@ -269,5 +269,6 @@ properties:
       nav2_profile: {type: string}
       base_mode: {enum: [real, fake, none]}
       cli_args: {type: array, items: {type: string}}
+      test_environment: {enum: [suspended_wheels]}
       lidar_inverted: {type: boolean}
       lidar_reversion: {type: boolean}

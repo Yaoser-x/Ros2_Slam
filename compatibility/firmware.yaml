@@ -19,13 +19,13 @@ protocol:
   required_capabilities: 31
 firmware:
   repository: Yaoser-x/SlamRobot_Chassis_Control
-  candidate_commit: bc472cc874e930aaed6eb8e7de73b41a2563dd85
-  candidate_tag: v1.0.0-rc1
+  candidate_commit: 158254bd5c21f74a64f1d7c8609475a4c7caa1c7
+  candidate_tag: null
   tested_commit: null
   compatible_commit: null
   compatible_tag: null
-  parameter_crc32: null
-  hardware_revision: null
+  parameter_crc32: 0x0D663E2A
+  hardware_revision: 131072
   status: implementation_ready_hil_pending
   implementation_spec: docs/interfaces/upper-protocol-v3.md
   golden_vector_file: tests/protocol/fixtures/upper_v3_golden.json

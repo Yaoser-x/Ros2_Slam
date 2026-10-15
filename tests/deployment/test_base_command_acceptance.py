@@ -411,10 +411,8 @@ esac
     assert called.count("\nlaunch robot_bringup base_only.launch.py") == 1
     session = next(line for line in called.splitlines() if line.startswith("SESSION pid="))
     launch_pid = session.split()[1].split("=", 1)[1]
-    assert f"SIGNAL -INT -- -{launch_pid}" in called
-    assert not any(
-        line.startswith("SIGNAL ") and f"-- {launch_pid}" in line for line in called.splitlines()
-    )
+    assert f"SIGNAL -INT -- {launch_pid}" in called
+    assert f"SIGNAL -INT -- -{launch_pid}" not in called
     assert "base_mode:=fake" in called and "effective_params_file:=" in called
     assert "control.launch.py" not in called and "stm32_bridge.launch.py" not in called
     assert ("SUCCESS " in result.stdout) == (expected == 0)

@@ -1,10 +1,10 @@
 calibration:
   schema_version: 1
-  version: 2026-07-15-initial
+  version: 2026-10-15-suspended-parameter-alignment
   status: provisional
   drive:
     wheel_radius_m: 0.0350
-    wheel_track_width_m: 0.1760
+    wheel_track_width_m: 0.1780
     encoder_counts_per_revolution: 2464.0
     odom_linear_scale: 1.0
     odom_angular_scale: 1.0
@@ -25,8 +25,8 @@ calibration:
 calibration_bundle:
   identity:
     hardware_revision: 131072
-    firmware_commit: bc472cc874e930aaed6eb8e7de73b41a2563dd85
-    firmware_parameter_crc32: 0  # 待实机读取；0 会使正式兼容门 fail-closed
+    firmware_commit: 158254bd5c21f74a64f1d7c8609475a4c7caa1c7
+    firmware_parameter_crc32: 0x0D663E2A  # 实机生效参数；每次启动仍须核对
     upper_architecture_baseline_commit: 2f16c8b
     upper_config_sha256: pending_compile
   wheel_layout:
@@ -34,7 +34,7 @@ calibration_bundle:
     order: [LF, LR, RF, RR]
   geometry:
     wheel_radius_m: 0.0350
-    effective_track_width_m: 0.1760
+    effective_track_width_m: 0.1780
     counts_per_revolution: 2464.0
   imu:
     frame: imu_link

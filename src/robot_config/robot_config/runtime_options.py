@@ -91,6 +91,12 @@ def runtime_overrides(arguments, effective, environment=None):
         index += 1
     if hardware:
         overrides["hardware"] = hardware
+    if "--suspended-wheel" in arguments:
+        if command != "base-test" or runtime["base_mode"] != "real":
+            raise ConfigError("--suspended-wheel requires base-test with the real UART provider")
+        if runtime.get("fusion_mode", effective["runtime"]["fusion_mode"]) != "wheel":
+            raise ConfigError("--suspended-wheel requires wheel-only odometry")
+        runtime["test_environment"] = "suspended_wheels"
     if yaw is not None:
         try:
             yaw = float(yaw)

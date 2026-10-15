@@ -56,6 +56,17 @@ def yaml_file(directory, name):
     return yaml.safe_load((directory / name).read_text(encoding="utf-8"))
 
 
+def test_suspended_cli_compiles_strict_schema_and_binds_measured_geometry(compiled_workdir):
+    paths, params = compile_run(
+        compiled_workdir, ["base-test", "--suspended-wheel"], profile="diagnostics"
+    )
+    effective = yaml_file(paths["manifest"].parent, "effective-config.yaml")
+    assert effective["runtime"]["test_environment"] == "suspended_wheels"
+    assert effective["runtime"]["fusion_mode"] == "wheel"
+    assert effective["calibration"]["drive"]["wheel_track_width_m"] == 0.178
+    assert effective["calibration_bundle"]["identity"]["firmware_parameter_crc32"] == 0x0D663E2A
+
+
 def custom_platform():
     return {
         "platform": {
