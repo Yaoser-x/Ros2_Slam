@@ -16,6 +16,8 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_motion_supervisor test/test_motion_supervisor.py
     APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}
   )
+  ament_add_pytest_test(test_gyro_admission test/test_gyro_admission.py
+    APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR})
 endif()
 
 ament_package()

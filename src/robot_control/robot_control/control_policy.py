@@ -151,6 +151,9 @@ class CommandMux:
     def clear(self) -> None:
         self._commands.clear()
 
+    def clear_source(self, source: str) -> None:
+        self._commands.pop(source, None)
+
     def has_recent_input(self, now_sec: float, quiet_sec: Optional[float] = None) -> bool:
         now = require_finite(now_sec, "quiet timestamp")
         window = self._timeout_sec if quiet_sec is None else max(float(quiet_sec), 0.0)
@@ -244,24 +247,64 @@ class MotionLimiter:
     @staticmethod
     def _step_axis(current, target, acceleration, max_accel, max_jerk, dt, max_velocity=1.0e9):
         target = _clamp(target, -max_velocity, max_velocity)
+        previous_acceleration = acceleration
+        jerk_step = max_jerk * dt
+        remaining = target - current
         desired_accel = _clamp((target - current) / dt, -max_accel, max_accel)
+
+        if jerk_step > 0.0:
+
+            def stopping_accel(distance):
+                # Reserve the continuous unwind distance after this tick.
+                # This bound remains feasible when the next dt changes.
+                distance = max(distance, 0.0)
+                root = math.sqrt(jerk_step * jerk_step + 2.0 * max_jerk * distance)
+                return 2.0 * max_jerk * distance / (root + jerk_step)
+
+            viable_low = max(
+                -max_accel,
+                previous_acceleration - jerk_step,
+                -stopping_accel(current + max_velocity),
+            )
+            viable_high = min(
+                max_accel, previous_acceleration + jerk_step, stopping_accel(max_velocity - current)
+            )
+            # An arrival must also permit zero acceleration on the next tick.
+            hit_accel = remaining / dt
+            if viable_low <= hit_accel <= viable_high and abs(hit_accel) <= jerk_step:
+                return target, hit_accel
+
+            # For a two-tick arrival, a1 + a2 = remaining / dt.  Intersect
+            # acceleration, jerk, final-zero and intermediate velocity bounds.
+            total_accel = remaining / dt
+            low = max(
+                viable_low,
+                total_accel - max_accel,
+                (total_accel - jerk_step) / 2.0,
+                total_accel - jerk_step,
+                (-max_velocity - current) / dt,
+            )
+            high = min(
+                viable_high,
+                total_accel + max_accel,
+                (total_accel + jerk_step) / 2.0,
+                total_accel + jerk_step,
+                (max_velocity - current) / dt,
+            )
+            if low <= high:
+                acceleration = _clamp(desired_accel, low, high)
+                return current + acceleration * dt, acceleration
+
+            # Unlike the old zero-acceleration heuristic, this still permits
+            # progress for every nonzero reachable residual.
+            desired_accel = math.copysign(stopping_accel(abs(remaining)), remaining)
+            acceleration = _clamp(desired_accel, viable_low, viable_high)
+            return _clamp(current + acceleration * dt, -max_velocity, max_velocity), acceleration
         acceleration = _clamp(
             desired_accel,
-            acceleration - max_jerk * dt,
-            acceleration + max_jerk * dt,
+            previous_acceleration - jerk_step,
+            previous_acceleration + jerk_step,
         )
-        # If continuing to accelerate would leave too little distance to unwind
-        # acceleration under the jerk bound, begin braking early.
-        remaining = target - current
-        if max_jerk > 0.0 and acceleration * remaining > 0.0:
-            unwind_time = abs(acceleration) / max_jerk
-            braking_distance = 0.5 * abs(acceleration) * unwind_time
-            if abs(remaining) <= braking_distance + abs(acceleration) * dt:
-                acceleration = _clamp(
-                    0.0,
-                    acceleration - max_jerk * dt,
-                    acceleration + max_jerk * dt,
-                )
         velocity = current + acceleration * dt
         if abs(velocity) > max_velocity:
             velocity = _clamp(velocity, -max_velocity, max_velocity)

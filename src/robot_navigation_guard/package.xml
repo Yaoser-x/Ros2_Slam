@@ -5,7 +5,15 @@
   <buildtool_depend>ament_cmake</buildtool_depend><buildtool_depend>ament_cmake_python</buildtool_depend>
   <exec_depend>rclpy</exec_depend><exec_depend>action_msgs</exec_depend>
   <exec_depend>nav2_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>robot_interfaces</exec_depend>
   <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>robot_chassis_ops</test_depend>
+  <test_depend>robot_state_estimation</test_depend>
+  <test_depend>robot_supervision</test_depend>
+  <test_depend>robot_control</test_depend>
+  <test_depend>robot_verification</test_depend>
+  <test_depend>nav_msgs</test_depend><test_depend>sensor_msgs</test_depend>
+  <test_depend>std_srvs</test_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

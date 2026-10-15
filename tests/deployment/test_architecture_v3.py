@@ -24,7 +24,10 @@ def test_bridge_has_no_navigation_dependency_and_only_installs_v3_runtime():
     package = (ROOT / "src/stm32_robot_bridge/package.xml").read_text(encoding="utf-8")
     cmake = (ROOT / "src/stm32_robot_bridge/CMakeLists.txt").read_text(encoding="utf-8")
     assert "nav2" not in package and "slam_toolbox" not in package
-    assert "protocol_v3.py" in cmake and "bridge_node_v3.py" in cmake
+    assert "ament_python_install_package" in cmake and "bridge_node_v3.py" in cmake
+    module_directory = ROOT / "src/stm32_robot_bridge/stm32_robot_bridge"
+    assert (module_directory / "protocol_v3.py").is_file()
+    assert not (module_directory / "protocol_v2.py").exists()
     assert "protocol_v2.py" not in cmake and "bridge_node.py" not in cmake
 
 

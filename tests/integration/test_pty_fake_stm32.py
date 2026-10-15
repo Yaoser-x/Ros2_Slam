@@ -89,6 +89,7 @@ def decode_velocity(frames):
 
 
 @pytest.mark.serial
+@pytest.mark.skipif(not hasattr(os, "openpty"), reason="PTY requires real POSIX os.openpty")
 def test_pty_upper_v3_hello_drive_timeout_fault_and_reconnect_rearm():
     master_fd, slave_fd = os.openpty()
     slave_name = os.ttyname(slave_fd)

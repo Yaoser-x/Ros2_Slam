@@ -4,6 +4,7 @@
 import math
 
 import rclpy
+from rclpy.impl.implementation_singleton import rclpy_implementation as _rclpy
 from builtin_interfaces.msg import Time as TimeMessage
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
@@ -214,8 +215,11 @@ def main(args=None) -> None:
     node = WheelOdometryNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
         pass
+    except _rclpy.RCLError:
+        if node.context.ok():
+            raise
     finally:
         node.destroy_node()
         rclpy.try_shutdown()

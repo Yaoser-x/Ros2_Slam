@@ -16,6 +16,7 @@
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>robot_localization</exec_depend>
   <exec_depend>robot_interfaces</exec_depend>
+  <exec_depend>robot_config</exec_depend>
   <depend>robot_chassis_model</depend>
   <exec_depend>sensor_msgs</exec_depend>
 

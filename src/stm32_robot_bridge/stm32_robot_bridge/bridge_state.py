@@ -45,6 +45,10 @@ class BridgeStateMachine:
         if self.state is BridgeState.WAIT_HELLO:
             self._set_state(BridgeState.WAIT_STATUS)
 
+    def on_hello_incompatible(self) -> None:
+        self.expected_disable_sequence = None
+        self._set_state(BridgeState.WAIT_HELLO)
+
     def on_valid_status(self, status_flags: int) -> None:
         has_fault = bool(int(status_flags) & FAULT_STATUS_MASK)
         if has_fault:

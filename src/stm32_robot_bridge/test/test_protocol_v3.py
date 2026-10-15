@@ -59,13 +59,17 @@ def test_v3_velocity_layout_and_sequence_order():
     assert not sequence_is_forward(4, 5)
 
 
-def test_imu_identity_requires_both_counters_to_advance_within_session():
+def test_imu_identity_orders_sample_count_independently_of_sensor_clock():
     previous = (7, 10, 100)
     assert not imu_identity_is_new(previous, previous)
-    assert not imu_identity_is_new((7, 11, 99), previous)
+    assert imu_identity_is_new((7, 11, 99), previous)
     assert not imu_identity_is_new((7, 9, 101), previous)
     assert imu_identity_is_new((7, 11, 101), previous)
     assert imu_identity_is_new((8, 0, 0), previous)
+    assert imu_identity_is_new((7, 11, 0), previous)
+    assert imu_identity_is_new((7, 11, 0), (7, 10, 0))
+    assert imu_identity_is_new((7, 11, 0), (7, 10, 0x00FFFF00))
+    assert imu_identity_is_new((7, 0, 0), (7, 0xFFFFFFFF, 0x00FFFF00))
 
 
 def test_v3_status_and_framing_fragmentation():
@@ -149,19 +153,34 @@ def test_command_stream_keepalive_timeout_and_failed_send():
     assert stream.last_command_time is None
 
 
-def test_identical_ros_commands_for_five_seconds_refresh_lease_without_new_sequence():
+def test_fresh_identical_commands_renew_wire_sequence_once_per_second():
     stream = CommandStream(timeout_sec=0.15, keepalive_sec=0.05, session_id=7)
     sent = []
-    initial_sequence = None
+    previous_sequence = 0
+    renewals = []
     for step in range(101):
         now = step * 0.05
         stream.update_command(0.2, 0.0, now)
-        if initial_sequence is None:
-            initial_sequence = stream.sequence
-        assert stream.sequence == initial_sequence
+        if stream.sequence != previous_sequence:
+            renewals.append(now)
+            previous_sequence = stream.sequence
         stream.tick(now, sent.append)
         assert stream.enabled
     assert stream.last_command_time == pytest.approx(5.0)
+    assert renewals == pytest.approx([0, 1, 2, 3, 4, 5])
     # Binary floating point can occasionally place an exact 50 ms tick just
     # below the keepalive boundary; the stream must nevertheless remain live.
     assert len(sent) >= 50
+
+
+def test_keepalive_without_fresh_command_cannot_renew_sequence_or_lease():
+    stream = CommandStream(timeout_sec=0.15, keepalive_sec=0.05, session_id=7)
+    sent = []
+    stream.update_command(0.2, 0, 0)
+    assert stream.tick(0, sent.append)
+    sequence = stream.sequence
+    assert stream.tick(0.05, sent.append)
+    assert stream.sequence == sequence
+    assert stream.tick(0.16, sent.append)
+    assert not stream.enabled
+    assert stream.sequence == sequence + 1

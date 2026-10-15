@@ -4,7 +4,7 @@
 """
 
 import sys
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -23,6 +23,15 @@ _mock_geometry_msgs = MagicMock(name="geometry_msgs")
 _mock_sensor_msgs = MagicMock(name="sensor_msgs")
 
 sys.modules["rclpy"] = _mock_rclpy
+_mock_executors = ModuleType("rclpy.executors")
+_mock_executors.ExternalShutdownException = type("ExternalShutdownException", (Exception,), {})
+sys.modules["rclpy.executors"] = _mock_executors
+_mock_implementation = ModuleType("rclpy.impl.implementation_singleton")
+_mock_implementation.rclpy_implementation = SimpleNamespace(
+    RCLError=type("RCLError", (RuntimeError,), {})
+)
+sys.modules["rclpy.impl"] = ModuleType("rclpy.impl")
+sys.modules["rclpy.impl.implementation_singleton"] = _mock_implementation
 sys.modules["geometry_msgs"] = _mock_geometry_msgs
 sys.modules["geometry_msgs.msg"] = MagicMock()
 sys.modules["sensor_msgs"] = _mock_sensor_msgs
@@ -184,9 +193,17 @@ def make_mux(**param_overrides):
     node.rearm_reason_flags = 0
     node.wire_ready = True
     node.gate_state = _FakeHostControlState.STATE_WAIT_FRESH_HOST_INTENT
-    node.nav_active = True
-    node.nav_goal_generation = 1
+    set_navigation_guard(node, generation=1)
     return node
+
+
+def set_navigation_guard(node, generation=1, *, active=True):
+    node._on_navigation_guard(
+        SimpleNamespace(
+            state=_FakeNavigationGuardState.STATE_ACTIVE if active else 0,
+            goal_generation=generation,
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -306,6 +323,7 @@ class TestCmdVelMuxPublish:
         node.mux.update("teleop", Command(0.2, 0.0), now_sec=0.10)
         node.mux.update("nav", Command(0.1, 0.0), now_sec=0.20)
         node.get_clock().now.return_value.nanoseconds = int(0.20e9)
+        set_navigation_guard(node)
         node._publish_selected()
         node.publisher.reset_mock()
         node.get_clock().now.return_value.nanoseconds = int(0.36e9)
@@ -322,6 +340,51 @@ class TestCmdVelMuxPublish:
         node._publish_selected()
 
         assert not hasattr(node, "legacy_publisher")
+
+    def test_dead_navigation_guard_revokes_fresh_nav_candidate(self):
+        from robot_control.control_policy import Command
+
+        node = make_mux(timeout_sec=1.0)
+        node.mux.update("nav", Command(0.2, 0.0), now_sec=0.0)
+        node._publish_selected()
+        node.publisher.reset_mock()
+        node.get_clock().now.return_value.nanoseconds = int(0.30e9)
+        message = MagicMock()
+        message.linear.x, message.angular.z = 0.3, 0.0
+        node._make_callback("nav")(message)
+        node._publish_selected()
+
+        released = node.publisher.publish.call_args[0][0]
+        assert not released.enable
+        assert not node.mux.select(0.30).active
+        assert node.invalid_command_count == 0
+
+    def test_dead_navigation_guard_preserves_manual_fallback(self):
+        from robot_control.control_policy import Command
+
+        node = make_mux(timeout_sec=1.0)
+        node.mux.update("nav", Command(0.2, 0.0), now_sec=0.0)
+        node._publish_selected()
+        node.mux.update("teleop", Command(0.1, 0.0), now_sec=0.2)
+        node.publisher.reset_mock()
+        node.get_clock().now.return_value.nanoseconds = int(0.30e9)
+        node._publish_selected()
+
+        selected = node.publisher.publish.call_args[0][0]
+        assert selected.enable
+        assert selected.host_subsource == _FakeHostMotionCommand.HOST_SUBSOURCE_TELEOP
+
+    def test_goal_terminal_state_releases_cached_navigation_immediately(self):
+        from robot_control.control_policy import Command
+
+        node = make_mux()
+        node.mux.update("nav", Command(0.2, 0.0), now_sec=0.0)
+        node._publish_selected()
+        node.publisher.reset_mock()
+        set_navigation_guard(node, active=False)
+
+        assert not node.publisher.publish.call_args[0][0].enable
+        assert not node.mux.select(0.0).active
 
     def test_transport_rearm_clears_old_goal_and_requires_quiet_then_fresh_input(self):
         from robot_control.control_policy import Command
@@ -361,13 +424,74 @@ class TestCmdVelMuxPublish:
         node._publish_selected()
         assert node.gate_state == _FakeHostControlState.STATE_WAIT_FRESH_HOST_INTENT
 
-        node.nav_goal_generation = 2
+        set_navigation_guard(node, generation=2)
         fresh = MagicMock()
         fresh.linear.x, fresh.angular.z = 0.1, 0.0
         node._make_callback("nav")(fresh)
         resumed = node.publisher.publish.call_args[0][0]
         assert resumed.enable is True
         assert not node.rearm_required
+
+    def test_rearm_retries_lost_disable_until_wire_ready_without_automatic_enable(self):
+        node = make_mux()
+        node.rearm_required = True
+        node.wire_ready = False
+        node.gate_state = _FakeHostControlState.STATE_HOST_CLEARED
+        node.release_sent_wire_session = None
+        wire = SimpleNamespace(
+            wire_session_id=7,
+            wire_rearm_required=True,
+            wire_rearm_reason_flags=_FakeHostControlState.REARM_TRANSPORT,
+            link_state=5,
+            protocol_compatible=True,
+        )
+        node._on_chassis_state(wire)
+        first = node.publisher.publish.call_args[0][0]
+        assert not first.enable and first.command_epoch
+        node.get_clock().now.return_value.nanoseconds = int(0.02e9)
+        node._publish_selected()
+        assert node.publisher.publish.call_count == 1
+        node.get_clock().now.return_value.nanoseconds = int(0.04e9)
+        node._on_chassis_state(wire)
+        node._publish_selected()
+        assert node.publisher.publish.call_count == 1
+        for elapsed in (0.06, 0.30, 0.60):
+            node.get_clock().now.return_value.nanoseconds = int(elapsed * 1e9)
+            node._on_chassis_state(wire)
+            node._publish_selected()
+        messages = [call.args[0] for call in node.publisher.publish.call_args_list]
+        assert len(messages) == 4
+        assert all(not message.enable for message in messages)
+        assert all(message.command_epoch == first.command_epoch for message in messages)
+        assert [message.sequence for message in messages] == [1, 2, 3, 4]
+        assert node.gate_state == _FakeHostControlState.STATE_WAIT_WIRE_READY
+        assert node.rearm_required
+        wire.link_state = _FakeChassisLinkState.STATE_WIRE_REARM_READY
+        wire.wire_rearm_required = False
+        node._on_chassis_state(wire)
+        node._publish_selected()
+        assert node.gate_state == _FakeHostControlState.STATE_WAIT_FRESH_HOST_INTENT
+        assert node.rearm_required and not node.last_active
+        for elapsed in (0.80, 1.0):
+            node.get_clock().now.return_value.nanoseconds = int(elapsed * 1e9)
+            node._publish_selected()
+        assert node.publisher.publish.call_count == 4
+
+    def test_stale_supervision_still_retries_disable_without_advancing_host_gate(self):
+        node = make_mux(require_motion_supervision=True)
+        node.rearm_required = True
+        node.wire_ready = False
+        node.gate_state = _FakeHostControlState.STATE_HOST_CLEARED
+        node._publish_selected()
+        assert node.publisher.publish.call_count == 1
+        node.get_clock().now.return_value.nanoseconds = int(0.06e9)
+        node._publish_selected()
+        assert node.publisher.publish.call_count == 2
+        assert node.gate_state == _FakeHostControlState.STATE_HOST_CLEARED
+        messages = [call.args[0] for call in node.publisher.publish.call_args_list]
+        assert all(not message.enable for message in messages)
+        assert messages[0].command_epoch == messages[1].command_epoch
+        assert messages[0].sequence < messages[1].sequence
 
     def test_critical_motion_state_releases_and_latches_rearm(self):
         node = make_mux(require_motion_supervision=True)

@@ -7,16 +7,21 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from robot_config.launch_config import load_launch_config
 
 
 def _compose(context):
     share = get_package_share_directory("robot_state_estimation")
     requested = LaunchConfiguration("base_fusion_mode").perform(context).strip().lower()
+    effective_params = LaunchConfiguration("effective_params_file").perform(context).strip()
+    effective = load_launch_config(effective_params)[0] if effective_params else None
+    compiled_mode = effective["runtime"]["fusion_mode"] if effective else "wheel"
     aliases = {"none": "wheel", "ekf": "wheel_imu"}
-    fusion_mode = aliases.get(requested, requested)
+    fusion_mode = aliases.get(requested, requested) if requested else compiled_mode
+    if effective and fusion_mode != compiled_mode:
+        raise RuntimeError("base_fusion_mode differs from compiled config")
     if fusion_mode not in ("wheel", "wheel_imu"):
         raise RuntimeError("base_fusion_mode must be wheel or wheel_imu")
-    effective_params = LaunchConfiguration("effective_params_file").perform(context).strip()
     node_params = [effective_params] if effective_params else []
     nodes = [
         Node(
@@ -34,9 +39,11 @@ def _compose(context):
             parameters=node_params,
         ),
     ]
-    formal_input = "wheel/odom"
+    formal_input = effective["platform"]["topics"]["wheel_odom"] if effective else "wheel/odom"
     if fusion_mode == "wheel_imu":
         ekf_file = LaunchConfiguration("ekf_wheel_imu_params_file").perform(context)
+        if effective:
+            ekf_file = os.path.join(os.path.dirname(effective_params), "ekf-wheel-imu.yaml")
         if not os.path.isfile(ekf_file):
             raise RuntimeError(f"EKF params file does not exist: {ekf_file}")
         nodes.append(
@@ -60,7 +67,11 @@ def _compose(context):
                 *node_params,
                 {
                     "input_topic": formal_input,
-                    "output_topic": LaunchConfiguration("odom_topic"),
+                    "output_topic": (
+                        effective["platform"]["topics"]["odom"]
+                        if effective
+                        else LaunchConfiguration("odom_topic")
+                    ),
                 },
             ],
         )
@@ -72,7 +83,7 @@ def generate_launch_description():
     share = get_package_share_directory("robot_state_estimation")
     return LaunchDescription(
         [
-            DeclareLaunchArgument("base_fusion_mode", default_value="wheel"),
+            DeclareLaunchArgument("base_fusion_mode", default_value=""),
             DeclareLaunchArgument("effective_params_file", default_value=""),
             DeclareLaunchArgument("odom_topic", default_value="odom"),
             DeclareLaunchArgument(

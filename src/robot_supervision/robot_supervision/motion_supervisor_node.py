@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """ROS adapter for motion supervision decisions."""
 
+import math
 import time
 from typing import Any, Optional
 
 import rclpy
+from rclpy.impl.implementation_singleton import rclpy_implementation as _rclpy
 from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -88,8 +90,22 @@ class MotionSupervisorNode(Node):
         self.last_command_at = time.monotonic()
 
     def _on_imu(self, msg: Imu) -> None:
-        self.last_gyro_z = float(msg.angular_velocity.z)
-        self.last_imu_at = time.monotonic()
+        gyro = float(msg.angular_velocity.z)
+        covariance = float(msg.angular_velocity_covariance[0])
+        sample_sec = float(msg.header.stamp.sec) + float(msg.header.stamp.nanosec) * 1e-9
+        age = self.get_clock().now().nanoseconds * 1e-9 - sample_sec
+        if (
+            not math.isfinite(gyro)
+            or not math.isfinite(covariance)
+            or covariance < 0.0
+            or not -0.02 <= age <= self.imu_timeout
+        ):
+            self.last_gyro_z = None
+            self.last_imu_at = None
+            return
+        self.last_gyro_z = gyro
+        # Include sample age at admission, then use only the monotonic clock.
+        self.last_imu_at = time.monotonic() - max(age, 0.0)
 
     def _on_wheel(self, msg: WheelObservation) -> None:
         now = time.monotonic()
@@ -259,8 +275,11 @@ def main(args=None) -> None:
     node = MotionSupervisorNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
         pass
+    except _rclpy.RCLError:
+        if node.context.ok():
+            raise
     finally:
         node.destroy_node()
         rclpy.try_shutdown()

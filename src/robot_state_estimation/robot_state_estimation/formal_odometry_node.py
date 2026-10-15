@@ -4,9 +4,11 @@
 import time
 from typing import Optional
 import rclpy
+from rclpy.impl.implementation_singleton import rclpy_implementation as _rclpy
 from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
+from rclpy.clock import Clock, ClockType
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from robot_interfaces.msg import PlatformCompatibilityState, WheelObservation
 from tf2_ros import TransformBroadcaster
@@ -22,11 +24,19 @@ class FormalOdometryNode(Node):
         self.declare_parameter("compatibility_state_topic", "platform/compatibility_state")
         self.declare_parameter("wheel_observation_topic", "wheel/observation")
         self.declare_parameter("evidence_max_age_sec", 0.25)
+        self.declare_parameter("compatibility_timeout_sec", 0.25)
         self.permitted = False
         self.permitted_session = 0
         self.fresh_evidence_at: Optional[float] = None
         self.fresh_evidence_stamp_ns: Optional[int] = None
         self.evidence_max_age_sec = float(self.get_parameter("evidence_max_age_sec").value)
+        self.compatibility_timeout_sec = float(
+            self.get_parameter("compatibility_timeout_sec").value
+        )
+        if min(self.evidence_max_age_sec, self.compatibility_timeout_sec) <= 0.0:
+            raise ValueError("formal odometry freshness limits must be positive")
+        self.compatibility_received_at: Optional[float] = None
+        self.steady_clock = Clock(clock_type=ClockType.STEADY_TIME)
         self.publisher = self.create_publisher(
             Odometry, str(self.get_parameter("output_topic").value), 20
         )
@@ -54,8 +64,10 @@ class FormalOdometryNode(Node):
             self._on_odometry,
             20,
         )
+        self.create_timer(0.05, self._health_tick, clock=self.steady_clock)
 
     def _on_compatibility(self, msg: PlatformCompatibilityState) -> None:
+        self.compatibility_received_at = time.monotonic()
         permitted = bool(msg.permit_formal_odometry and msg.observation_ready)
         session = int(msg.observation_session_id) if permitted else 0
         if not permitted or session != self.permitted_session:
@@ -63,6 +75,16 @@ class FormalOdometryNode(Node):
             self.fresh_evidence_stamp_ns = None
         self.permitted = permitted
         self.permitted_session = session
+
+    def _health_tick(self) -> None:
+        if (
+            self.compatibility_received_at is None
+            or time.monotonic() - self.compatibility_received_at > self.compatibility_timeout_sec
+        ):
+            self.permitted = False
+            self.permitted_session = 0
+            self.fresh_evidence_at = None
+            self.fresh_evidence_stamp_ns = None
 
     def _on_wheel_observation(self, msg: WheelObservation) -> None:
         if (
@@ -77,6 +99,7 @@ class FormalOdometryNode(Node):
             )
 
     def _on_odometry(self, msg: Odometry) -> None:
+        self._health_tick()
         input_stamp_ns = int(msg.header.stamp.sec) * 1_000_000_000 + int(msg.header.stamp.nanosec)
         if (
             not self.permitted
@@ -107,6 +130,11 @@ def main(args=None) -> None:
     node = FormalOdometryNode()
     try:
         rclpy.spin(node)
+    except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
+        pass
+    except _rclpy.RCLError:
+        if node.context.ok():
+            raise
     finally:
         node.destroy_node()
         rclpy.try_shutdown()

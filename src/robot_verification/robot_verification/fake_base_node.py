@@ -7,6 +7,7 @@ from collections import deque
 from typing import Deque, Optional
 
 import rclpy
+from rclpy.impl.implementation_singleton import rclpy_implementation as _rclpy
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from rclpy.node import Node
 from rclpy.clock import Clock, ClockType
@@ -475,8 +476,11 @@ def main(args=None) -> None:
     node = FakeBaseNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
         pass
+    except _rclpy.RCLError:
+        if node.context.ok():
+            raise
     finally:
         node.destroy_node()
         rclpy.try_shutdown()

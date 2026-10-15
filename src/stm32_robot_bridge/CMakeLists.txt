@@ -4,17 +4,7 @@ project(stm32_robot_bridge)
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 
-ament_get_python_install_dir(PYTHON_INSTALL_DIR)
-install(FILES
-  stm32_robot_bridge/__init__.py
-  stm32_robot_bridge/bridge_core.py
-  stm32_robot_bridge/bridge_state.py
-  stm32_robot_bridge/framing.py
-  stm32_robot_bridge/protocol_v3.py
-  stm32_robot_bridge/serial_transport.py
-  stm32_robot_bridge/transport_supervisor.py
-  DESTINATION ${PYTHON_INSTALL_DIR}/${PROJECT_NAME}
-)
+ament_python_install_package(${PROJECT_NAME})
 
 install(PROGRAMS
   stm32_robot_bridge/bridge_node_v3.py

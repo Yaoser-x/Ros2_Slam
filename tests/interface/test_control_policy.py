@@ -151,3 +151,38 @@ def test_motion_limiter_is_continuous_across_source_switch_and_resets_on_release
 
     limiter.reset()
     assert limiter.current == Command(0.0, 0.0)
+
+
+@pytest.mark.parametrize("target", [0.001, 0.01, 0.24, 0.35, 0.4, -0.001, -0.01, -0.24, -0.4])
+@pytest.mark.parametrize("periods", [(0.05,), (0.04, 0.06, 0.05)])
+def test_motion_limiter_settles_and_stops_with_acceleration_and_jerk_bounds(target, periods):
+    limiter = MotionLimiter(
+        max_linear_accel=0.5,
+        max_angular_accel=1.5,
+        max_linear_jerk=2.0,
+        max_angular_jerk=6.0,
+        max_linear_velocity=0.4,
+        max_angular_velocity=1.5,
+    )
+    now = 0.0
+    previous = limiter.limit(Command(target, target * 3), now_sec=now)
+    previous_accel = (0.0, 0.0)
+    for goal in (Command(target, target * 3), Command(0.0, 0.0)):
+        for tick in range(400):
+            dt = periods[tick % len(periods)]
+            now += dt
+            value = limiter.limit(goal, now_sec=now)
+            accel = (
+                (value.linear_x - previous.linear_x) / dt,
+                (value.angular_z - previous.angular_z) / dt,
+            )
+            assert abs(value.linear_x) <= 0.4 + 1e-12
+            assert abs(value.angular_z) <= 1.5 + 1e-12
+            assert abs(accel[0]) <= 0.5 + 1e-10
+            assert abs(accel[1]) <= 1.5 + 1e-10
+            assert abs(accel[0] - previous_accel[0]) <= 2.0 * dt + 1e-10
+            assert abs(accel[1] - previous_accel[1]) <= 6.0 * dt + 1e-10
+            previous, previous_accel = value, accel
+        assert value.linear_x == pytest.approx(goal.linear_x, abs=1e-12)
+        assert value.angular_z == pytest.approx(goal.angular_z, abs=1e-12)
+        assert previous_accel == pytest.approx((0.0, 0.0), abs=1e-12)

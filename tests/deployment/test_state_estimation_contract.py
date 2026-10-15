@@ -45,13 +45,18 @@ def test_real_base_tf_has_one_odom_to_base_link_owner():
         encoding="utf-8"
     )
 
-    assert 'DeclareLaunchArgument("base_fusion_mode", default_value="wheel")' in system
+    assert 'DeclareLaunchArgument("base_fusion_mode", default_value="")' in system
+    profile = yaml.safe_load(
+        (ROOT / "src/robot_config/config/profiles/mapping.yaml").read_text(encoding="utf-8")
+    )
+    assert profile["runtime"]["fusion_mode"] == "wheel"
     state_launch = (
         ROOT / "src" / "robot_state_estimation" / "launch" / "state_estimation.launch.py"
     ).read_text(encoding="utf-8")
     assert 'package="robot_localization"' in state_launch
     assert 'if fusion_mode == "wheel_imu"' in state_launch
-    assert 'formal_input = "wheel/odom"' in state_launch
+    assert 'effective["platform"]["topics"]["wheel_odom"]' in state_launch
+    assert "load_launch_config" in state_launch
     assert "wheel_odom_republisher" not in state_launch
     assert "bridge v3 never owns odom->base_link TF" in (
         ROOT / "src/stm32_robot_bridge/stm32_robot_bridge/bridge_node_v3.py"

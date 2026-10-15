@@ -214,16 +214,18 @@ def sequence_is_forward(new: int, old: int) -> bool:
 
 
 def imu_identity_is_new(current, previous) -> bool:
-    """Require both IMU counters to advance within one wire session."""
+    """Order samples by their u32 count, independently of sensor-time quality.
+
+    BMI270 sensor_time is a raw 24-bit clock and can also be invalid.  Its
+    wrap or absence must not discard a fresh sample with usable gyro fields.
+    """
     if previous is None or int(current[0]) != int(previous[0]):
         return True
-    return sequence_is_forward(current[1], previous[1]) and sequence_is_forward(
-        current[2], previous[2]
-    )
+    return sequence_is_forward(current[1], previous[1])
 
 
 class CommandStream:
-    """Wire-session stream; unchanged targets use duplicate-sequence keepalives."""
+    """Keepalives preserve identity; fresh host commands renew it every second."""
 
     def __init__(
         self, timeout_sec: float, keepalive_sec: float, session_id: int, mode: int = 2
@@ -236,16 +238,24 @@ class CommandStream:
         self.last_command_time: Optional[float] = None
         self.last_send_time: Optional[float] = None
         self.last_payload: Optional[bytes] = None
+        self.last_sequence_time: Optional[float] = None
 
     def update_command(self, vx: float, wz: float, now_sec: float) -> None:
         # Sequence identity follows the values that actually cross the wire.
         target = struct.unpack("<ff", struct.pack("<ff", float(vx), float(wz)))
-        if target != self.target or not self.enabled:
+        if (
+            target != self.target
+            or not self.enabled
+            or self.last_sequence_time is None
+            or float(now_sec) - self.last_sequence_time >= 1.0
+        ):
             self.sequence = (self.sequence + 1) & 0xFFFFFFFF
+            self.last_sequence_time = float(now_sec)
         self.target, self.enabled, self.last_command_time = target, True, float(now_sec)
 
     def clear_command(self) -> None:
         self.target, self.enabled, self.last_command_time = (0.0, 0.0), False, None
+        self.last_sequence_time = None
 
     def tick(self, now_sec: float, send_payload: Callable[[bytes], object]) -> bool:
         if self.last_command_time is None:
@@ -297,6 +307,7 @@ class CommandStream:
         if send_payload(payload) is False:
             return False
         self.target, self.enabled, self.last_command_time = (0.0, 0.0), False, None
+        self.last_sequence_time = None
         self.last_payload, self.last_send_time = payload, (
             float(now_sec) if now_sec is not None else None
         )

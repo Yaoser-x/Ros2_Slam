@@ -74,6 +74,7 @@ from stm32_robot_bridge.protocol_v3 import (
     encode_get_info_payload,
     encode_line_ctrl_payload,
     imu_identity_is_new,
+    sequence_is_forward,
 )
 from stm32_robot_bridge.transport_supervisor import SerialTransportSupervisor
 
@@ -155,7 +156,8 @@ class STM32BridgeV3(Node):
         )
         self.last_ack_evidence_at = time.monotonic()
         self.pending_disable_started_at: Optional[float] = None
-        self.last_applied_sequence = 0
+        self.pending_active_ack_started_at: Optional[float] = None
+        self.last_applied_sequence: Optional[int] = None
         self.release_count = 0
         self.invalid_command_count = 0
         self.command_deadline_miss_count = 0
@@ -263,10 +265,14 @@ class STM32BridgeV3(Node):
         if not command.enable:
             self._release("command disabled")
             return
-        previous_wire_sequence = self.command_stream.sequence
         self.command_stream.update_command(command.vx, command.wz, now_mono)
-        if self.command_stream.sequence != previous_wire_sequence:
-            self.last_ack_evidence_at = now_mono
+        if (
+            self.pending_active_ack_started_at is None
+            and self.command_stream.sequence != self.last_applied_sequence
+        ):
+            # Start the first unresolved command's budget.  New targets while
+            # waiting are transmissions, not evidence that firmware applied them.
+            self.pending_active_ack_started_at = now_mono
 
     def _on_command_deadline(self, event) -> None:
         self.command_deadline_miss_count += max(int(event.total_count_change), 0)
@@ -294,10 +300,11 @@ class STM32BridgeV3(Node):
             self._release(reason)
             self._publish_link_state()
         if self.core.can_drive and self.command_stream.enabled:
-            self.command_stream.tick(
+            sent = self.command_stream.tick(
                 now, lambda payload: self.transport.submit(CMD_SET_VELOCITY, payload, coalesce=True)
             )
-            self.core.record_wire_sequence(self.command_stream.sequence)
+            if sent:
+                self.core.record_wire_sequence(self.command_stream.sequence)
         if self.core.state is BridgeState.WAIT_POST_CLEAR_DISABLE_ACK:
             self.command_stream.tick_disabled(
                 now,
@@ -305,7 +312,11 @@ class STM32BridgeV3(Node):
                     CMD_SET_VELOCITY, payload, critical=True, coalesce=True
                 ),
             )
-        if self.command_stream.enabled and now - self.last_ack_evidence_at > self.ack_timeout:
+        if (
+            self.command_stream.enabled
+            and self.pending_active_ack_started_at is not None
+            and now - self.pending_active_ack_started_at > self.ack_timeout
+        ):
             self.core.require_rearm(REARM_ACK_TIMEOUT)
             self._release("command ACK timeout")
             self._publish_link_state()
@@ -330,6 +341,8 @@ class STM32BridgeV3(Node):
         )
         self.last_ack_evidence_at = time.monotonic()
         self.pending_disable_started_at = None
+        self.pending_active_ack_started_at = None
+        self.last_applied_sequence = None
         self.last_status = None
         self.enabled_mask = None
         self.last_imu_identity = None
@@ -346,7 +359,14 @@ class STM32BridgeV3(Node):
         if cmd == CMD_HELLO:
             hello = decode_hello_payload(payload)
             if hello:
+                previous_hello = self.core.snapshot.hello
                 compatible = self.core.on_hello(hello)
+                if previous_hello is not None and previous_hello != hello:
+                    self._release("firmware identity changed", force_fresh=True)
+                    self._begin_wire_session(request_info=True)
+                    return
+                if not compatible:
+                    self._release("incompatible Upper-v3 HELLO")
                 msg = FirmwareInfo()
                 msg.header.stamp = self.get_clock().now().to_msg()
                 msg.wire_session_id = self.core.snapshot.wire_session_id
@@ -396,18 +416,35 @@ class STM32BridgeV3(Node):
 
     def _record_ack_evidence(self, status, received_at: float) -> None:
         required = ACK_SESSION_VALID | ACK_RECEIVED | ACK_APPLIED
+        applied = status.last_applied_sequence
+        sent = self.core.snapshot.wire_sent_sequence
         if (
             status.last_received_session_id == self.command_stream.session_id
-            and status.last_received_sequence == self.command_stream.sequence
-            and status.last_applied_sequence == self.command_stream.sequence
+            and self.core.snapshot.wire_session_id == self.command_stream.session_id
+            and status.last_received_sequence == applied
+            and (applied == sent or sequence_is_forward(sent, applied))
             and status.command_ack_flags & required == required
             and not status.command_ack_flags & ACK_REJECTED
             and status.last_reject_reason == 0
         ):
-            self.last_applied_sequence = status.last_applied_sequence
-            self.last_ack_evidence_at = float(received_at)
-            if self.core.state is BridgeState.WIRE_REARM_READY:
+            if (
+                self.core.state is BridgeState.WIRE_REARM_READY
+                and applied == self.command_stream.sequence
+            ):
                 self.pending_disable_started_at = None
+            if self.last_applied_sequence is None:
+                if applied != sent:
+                    return
+            elif not sequence_is_forward(applied, self.last_applied_sequence):
+                return
+            self.last_applied_sequence = applied
+            self.last_ack_evidence_at = float(received_at)
+            if self.command_stream.enabled and self.pending_active_ack_started_at is not None:
+                # A forward ACK may lag a changing target; let subsequent ACKs
+                # catch up.  Repeated ACKs cannot renew this waiting budget.
+                self.pending_active_ack_started_at = (
+                    None if applied == self.command_stream.sequence else float(received_at)
+                )
 
     def _publish_status(self, status, disposition: StatusDisposition) -> None:
         receive_stamp = self.get_clock().now().to_msg()
@@ -474,17 +511,35 @@ class STM32BridgeV3(Node):
         msg.temperature_c = imu.temperature_c
         self.imu_observation_pub.publish(msg)
 
-    def _release(self, reason: str, *, force_fresh: bool = False) -> None:
+    def _release(
+        self, reason: str, *, force_fresh: bool = False, publish_state: bool = True
+    ) -> None:
+        was_pending = self.core.state is BridgeState.WAIT_POST_CLEAR_DISABLE_ACK
+        pending_identity = (
+            self.core.snapshot.wire_session_id,
+            self.core.snapshot.wire_sent_sequence,
+        )
+        now = time.monotonic()
         if self.command_stream.release(
             lambda payload: self.transport.submit(CMD_SET_VELOCITY, payload, critical=True),
-            time.monotonic(),
+            now,
             force_new_sequence=force_fresh,
         ):
             self.release_count += 1
+            self.pending_active_ack_started_at = None
             self.core.on_disable_sent(self.command_stream.sequence)
             if self.core.state is BridgeState.WAIT_POST_CLEAR_DISABLE_ACK:
-                self.pending_disable_started_at = time.monotonic()
-            self._publish_link_state()
+                # DDS disable retries reuse one wire command.  Their arrival
+                # must not extend the ACK budget for that same identity.
+                identity = (self.command_stream.session_id, self.command_stream.sequence)
+                if (
+                    not was_pending
+                    or identity != pending_identity
+                    or self.pending_disable_started_at is None
+                ):
+                    self.pending_disable_started_at = now
+            if publish_state:
+                self._publish_link_state()
         if reason:
             self.get_logger().warn(reason)
 
@@ -536,7 +591,7 @@ class STM32BridgeV3(Node):
         msg.incompatibility_flags = s.incompatibility_flags
         msg.wire_session_id, msg.wire_sent_sequence = (
             s.wire_session_id,
-            self.command_stream.sequence,
+            s.wire_sent_sequence,
         )
         msg.firmware_ack_available = bool(
             status is not None
@@ -561,7 +616,7 @@ class STM32BridgeV3(Node):
         )
         msg.command_ack_age_ms = (
             min(int(max(now - self.last_ack_evidence_at, 0.0) * 1000.0), 0xFFFFFFFF)
-            if msg.firmware_ack_available
+            if msg.firmware_ack_available and self.last_applied_sequence is not None
             else ChassisLinkState.AGE_INVALID
         )
         msg.config_sha256 = self.config_sha256
@@ -633,8 +688,11 @@ class STM32BridgeV3(Node):
         self.diagnostics_pub.publish(array)
 
     def shutdown(self) -> None:
-        self._release("bridge shutdown")
-        self.transport.close()
+        try:
+            # rclpy's signal handler may already have invalidated the context.
+            self._release("", publish_state=False)
+        finally:
+            self.transport.close()
 
 
 def main(args=None) -> None:

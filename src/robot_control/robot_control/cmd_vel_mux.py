@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 import secrets
+import math
 import time
 from typing import Dict, Optional
 
 import rclpy
+from rclpy.impl.implementation_singleton import rclpy_implementation as _rclpy
 from geometry_msgs.msg import Twist
 from rclpy.clock import Clock, ClockType
 from rclpy.duration import Duration
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.qos_event import PublisherEventCallbacks, SubscriptionEventCallbacks
@@ -83,9 +86,11 @@ class CmdVelMuxNode(Node):
         self.declare_parameter("chassis_link_state_topic", "chassis/link_state")
         self.declare_parameter("host_control_state_topic", "chassis/host_control_state")
         self.declare_parameter("navigation_guard_state_topic", "navigation/guard_state")
+        self.declare_parameter("nav_guard_timeout_sec", 0.25)
         self.declare_parameter("require_motion_supervision", True)
         self.declare_parameter("supervision_timeout_sec", 0.25)
         self.declare_parameter("rearm_quiet_sec", 0.25)
+        self.declare_parameter("rearm_disable_retry_sec", 0.05)
 
         research_sources = [str(value) for value in self.get_parameter("research_sources").value]
         self.source_config = SourceConfig(research_sources=research_sources)
@@ -151,6 +156,10 @@ class CmdVelMuxNode(Node):
         self.require_supervision = bool(self.get_parameter("require_motion_supervision").value)
         self.supervision_timeout = float(self.get_parameter("supervision_timeout_sec").value)
         self.rearm_quiet_sec = float(self.get_parameter("rearm_quiet_sec").value)
+        self.rearm_disable_retry_sec = float(self.get_parameter("rearm_disable_retry_sec").value)
+        if not math.isfinite(self.rearm_disable_retry_sec) or self.rearm_disable_retry_sec <= 0.0:
+            raise ValueError("rearm_disable_retry_sec must be finite and positive")
+        self.last_rearm_disable_at: Optional[float] = None
         self.motion_state = None
         self.motion_state_at: Optional[float] = None
         self.motion_scale = 1.0
@@ -164,6 +173,10 @@ class CmdVelMuxNode(Node):
         self.quiet_started_at: Optional[float] = self.monotonic_clock()
         self.release_sent_wire_session: Optional[int] = None
         self.nav_active = False
+        self.nav_guard_at: Optional[float] = None
+        self.nav_guard_timeout = float(self.get_parameter("nav_guard_timeout_sec").value)
+        if self.nav_guard_timeout <= 0.0:
+            raise ValueError("nav_guard_timeout_sec must be positive")
         self.nav_goal_generation = 0
         self.required_nav_generation = 0
         self.subscriptions_by_source: Dict[str, object] = {}
@@ -209,7 +222,7 @@ class CmdVelMuxNode(Node):
 
     def _make_callback(self, source: str):
         def _callback(msg: Twist) -> None:
-            if source == "nav" and not self.nav_active:
+            if source == "nav" and not self._navigation_guard_fresh(self.monotonic_clock()):
                 return
             decision = self.mux.update(
                 source,
@@ -267,6 +280,9 @@ class CmdVelMuxNode(Node):
 
     def _publish_selected(self) -> None:
         now_sec = self.monotonic_clock()
+        if not self._navigation_guard_fresh(now_sec):
+            self.nav_active = False
+            self.mux.clear_source("nav")
         if self.require_supervision:
             supervision_fresh = (
                 self.motion_state_at is not None
@@ -280,6 +296,7 @@ class CmdVelMuxNode(Node):
                     )
                 elif not self.rearm_required:
                     self.gate_state = HostControlState.STATE_HOST_CLEARED
+                self._retry_rearm_disable(now_sec)
                 self._publish_control_state(now_sec)
                 return
         if self.rearm_required:
@@ -303,6 +320,7 @@ class CmdVelMuxNode(Node):
                         self.gate_state = HostControlState.STATE_WAIT_WIRE_READY
             elif self.gate_state == HostControlState.STATE_WAIT_WIRE_READY and self.wire_ready:
                 self.gate_state = HostControlState.STATE_WAIT_FRESH_HOST_INTENT
+            self._retry_rearm_disable(now_sec)
             self._publish_control_state(now_sec)
             return
         selected = self.mux.select(now_sec)
@@ -328,12 +346,27 @@ class CmdVelMuxNode(Node):
         self.gate_state = HostControlState.STATE_HOST_ACTIVE
         self._publish_control_state(now_sec)
 
+    def _retry_rearm_disable(self, now_sec: float) -> None:
+        if (
+            self.rearm_required
+            and not self.wire_ready
+            and (
+                self.last_rearm_disable_at is None
+                or now_sec - self.last_rearm_disable_at >= self.rearm_disable_retry_sec
+            )
+        ):
+            # A volatile first sample can miss a late DDS reader. Retry the
+            # same disabled Host epoch until current-session wire evidence
+            # confirms readiness; publishing is never an ACK substitute.
+            self._publish_release()
+
     def _publish_release(self) -> None:
         if self.command_epoch == 0:
             self.command_epoch = secrets.randbits(64) or 1
         self.motion_limiter.reset()
         selected = SelectedCommand(source="idle", command=Command(0.0, 0.0), active=False)
         self._publish_command(selected)
+        self.last_rearm_disable_at = self.monotonic_clock()
         self.last_active = False
         self.last_source = "idle"
 
@@ -369,8 +402,20 @@ class CmdVelMuxNode(Node):
             )
 
     def _on_navigation_guard(self, msg: NavigationGuardState) -> None:
+        self.nav_guard_at = self.monotonic_clock()
         self.nav_goal_generation = int(msg.goal_generation)
         self.nav_active = msg.state == NavigationGuardState.STATE_ACTIVE
+        if not self.nav_active:
+            self.mux.clear_source("nav")
+            if self.last_source == "nav":
+                self._publish_selected()
+
+    def _navigation_guard_fresh(self, now_sec: float) -> bool:
+        return bool(
+            self.nav_active
+            and self.nav_guard_at is not None
+            and 0.0 <= now_sec - self.nav_guard_at <= self.nav_guard_timeout
+        )
 
     def _latch_rearm(self, reason_flags, reject_reason, *, force_release=False) -> None:
         first = not self.rearm_required
@@ -446,10 +491,10 @@ def main() -> None:
     node = CmdVelMuxNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
-    except RuntimeError:
-        if rclpy.ok():
+    except _rclpy.RCLError:
+        if node.context.ok():
             raise
     finally:
         node.destroy_node()

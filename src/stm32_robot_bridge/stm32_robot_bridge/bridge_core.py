@@ -125,6 +125,7 @@ class BridgeCore:
         self.snapshot = RuntimeSnapshot()
         self._retired_host_epochs: deque[int] = deque(maxlen=16)
         self._host_disable_observed = False
+        self._host_rearm_required = True
         self._last_host_command: Optional[ValidatedCommand] = None
 
     @property
@@ -133,7 +134,11 @@ class BridgeCore:
 
     @property
     def can_drive(self) -> bool:
-        return self.machine.can_drive
+        return (
+            self.machine.can_drive
+            and self.snapshot.protocol_compatible
+            and not self.snapshot.rearm_required
+        )
 
     @property
     def state_generation(self) -> int:
@@ -155,6 +160,7 @@ class BridgeCore:
             reset_generation=(self.snapshot.reset_generation + 1) & 0xFFFFFFFF,
         )
         self._host_disable_observed = False
+        self._host_rearm_required = True
         self._last_host_command = None
         return self.snapshot
 
@@ -166,6 +172,8 @@ class BridgeCore:
         self.snapshot = replace(self.snapshot, state=self.machine.state)
 
     def on_disconnected(self) -> RuntimeSnapshot:
+        self._host_disable_observed = False
+        self._host_rearm_required = True
         self.machine.on_disconnected()
         self.snapshot = replace(
             self.snapshot,
@@ -192,20 +200,22 @@ class BridgeCore:
         if (hello.capabilities & self.required_capabilities) != self.required_capabilities:
             flags |= INCOMPAT_CAPABILITIES
         compatible = flags == 0
+        identity_changed = self.snapshot.hello is not None and self.snapshot.hello != hello
+        if identity_changed:
+            self.require_rearm(REARM_TRANSPORT)
+            self.machine.on_status_timeout()
+            self.snapshot = replace(self.snapshot, firmware=None, last_status_at=None)
         if compatible:
             self.machine.on_hello_compatible()
+        else:
+            self.require_rearm(REARM_PROTOCOL_INCOMPATIBLE)
+            self.machine.on_hello_incompatible()
         self.snapshot = replace(
             self.snapshot,
             state=self.machine.state,
             hello=hello,
             protocol_compatible=compatible,
             incompatibility_flags=flags,
-            rearm_required=True,
-            rearm_reason_flags=(
-                self.snapshot.rearm_reason_flags
-                if compatible
-                else self.snapshot.rearm_reason_flags | REARM_PROTOCOL_INCOMPATIBLE
-            ),
         )
         return compatible
 
@@ -235,20 +245,20 @@ class BridgeCore:
             and status.last_reject_reason == 0
         )
         if expected is not None and ack_current and self.machine.on_disable_applied(expected):
-            self.snapshot = replace(self.snapshot, rearm_required=False, rearm_reason_flags=0)
+            self.snapshot = replace(
+                self.snapshot,
+                rearm_required=self._host_rearm_required,
+                rearm_reason_flags=(
+                    self.snapshot.rearm_reason_flags if self._host_rearm_required else 0
+                ),
+            )
         if status.status_flags & (STATUS_FLAG_ESTOP | STATUS_FLAG_FAULT_STOP):
             reason = 0
             if status.status_flags & STATUS_FLAG_ESTOP:
                 reason |= REARM_ESTOP
             if status.status_flags & STATUS_FLAG_FAULT_STOP:
                 reason |= REARM_FAULT
-            self.snapshot = replace(
-                self.snapshot,
-                rearm_required=True,
-                rearm_reason_flags=self.snapshot.rearm_reason_flags | reason,
-                target_vx=0.0,
-                target_wz=0.0,
-            )
+            self.require_rearm(reason)
         firmware = FirmwareSnapshot(float(now_sec), status)
         self.snapshot = replace(
             self.snapshot,
@@ -259,6 +269,8 @@ class BridgeCore:
         return StatusDisposition.NEW
 
     def require_rearm(self, reason_flags: int) -> None:
+        self._host_rearm_required = True
+        self._host_disable_observed = False
         self.snapshot = replace(
             self.snapshot,
             rearm_required=True,
@@ -393,12 +405,15 @@ class BridgeCore:
                 None,
                 "enable after disable requires a new command epoch",
             )
-        if epoch_changed:
-            if current_epoch:
-                self._retired_host_epochs.append(current_epoch)
         if not enable:
-            self._host_disable_observed = True
+            # A wire disable ACK only qualifies the wire link.  The host must
+            # provide its own fresh disable after a safety event has ended.
+            self._host_disable_observed = not self.machine.fault_present
+            self._host_rearm_required = self.machine.fault_present
             self._last_host_command = normalized
+            if epoch_changed:
+                self._retired_host_epochs.append(current_epoch)
+            rearm_required = self._host_rearm_required or not self.machine.can_drive
             self.snapshot = replace(
                 self.snapshot,
                 state=self.machine.state,
@@ -408,6 +423,8 @@ class BridgeCore:
                 target_vx=0.0,
                 target_wz=0.0,
                 last_command_at=None,
+                rearm_required=rearm_required,
+                rearm_reason_flags=(self.snapshot.rearm_reason_flags if rearm_required else 0),
             )
             return self._decision(
                 CommandDisposition.ACCEPT_DISABLE,
@@ -439,6 +456,8 @@ class BridgeCore:
                 "bridge state does not permit drive",
             )
         self.machine.on_drive_enabled()
+        if epoch_changed:
+            self._retired_host_epochs.append(current_epoch)
         self._host_disable_observed = False
         self._last_host_command = normalized
         self.snapshot = replace(
@@ -507,6 +526,7 @@ class BridgeCore:
             and now_sec - self.snapshot.last_status_at > self.status_timeout_sec
         ):
             self.machine.on_status_timeout()
+            self.require_rearm(REARM_STATUS_TIMEOUT)
             self.snapshot = replace(
                 self.snapshot,
                 state=self.machine.state,
@@ -522,6 +542,7 @@ class BridgeCore:
             and now_sec - self.snapshot.last_command_at > self.command_timeout_sec
         ):
             self.machine.on_disable_command()
+            self.require_rearm(REARM_COMMAND_TIMEOUT)
             self.snapshot = replace(
                 self.snapshot,
                 state=self.machine.state,
