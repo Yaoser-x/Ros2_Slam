@@ -284,6 +284,7 @@ class STM32BridgeV3(Node):
         self.command_queue_drop_count += max(int(event.total_count_change), 0)
 
     def control_tick(self) -> None:
+        began = time.monotonic()
         for event in self.transport.drain_events():
             if event.kind == "connected":
                 self._on_connected()
@@ -295,8 +296,15 @@ class STM32BridgeV3(Node):
             elif event.kind == "frame":
                 self._handle_frame(event.cmd, event.payload, event.received_at)
         now = time.monotonic()
+        before = self.core.snapshot
         release, reason = self.core.tick(now)
         if release:
+            command_age = None if before.last_command_at is None else now - before.last_command_at
+            status_age = None if before.last_status_at is None else now - before.last_status_at
+            self.get_logger().warn(
+                f"timing reason={reason} host_sequence={before.command_sequence} "
+                f"command_age={command_age} status_age={status_age} drain_sec={now-began:.6f}"
+            )
             self._release(reason)
             self._publish_link_state()
         if self.core.can_drive and self.command_stream.enabled:
