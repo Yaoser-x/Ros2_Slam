@@ -11,7 +11,7 @@ import rclpy
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from rclpy.clock import Clock, ClockType
 from rclpy.duration import Duration
-from rclpy.executors import MultiThreadedExecutor
+from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import (
     DurabilityPolicy,
@@ -722,11 +722,13 @@ class STM32BridgeV3(Node):
 def main(args=None) -> None:
     rclpy.init(args=args)
     node = STM32BridgeV3()
-    executor = MultiThreadedExecutor(num_threads=4)
+    # All ROS callbacks use the mutually exclusive default group, and serial
+    # I/O already has its own owner. Keep state-machine callbacks on one thread.
+    executor = SingleThreadedExecutor()
     executor.add_node(node)
     try:
         executor.spin()
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.shutdown()
