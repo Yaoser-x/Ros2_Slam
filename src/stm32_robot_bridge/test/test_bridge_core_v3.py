@@ -931,3 +931,23 @@ def test_shutdown_closes_transport_even_when_release_raises():
     with pytest.raises(RuntimeError, match='release failure'):
         node.shutdown()
     assert node.transport._stop
+
+
+def test_sensor_batch_yields_without_dropping_frames_and_allows_fresh_host_callback():
+    node, clock = ready_timer_adapter()
+    handled = []
+    def slow_sensor_publish(cmd, payload, received_at):
+        handled.append((cmd, payload))
+        clock.value += 0.006
+    node._handle_frame = slow_sensor_publish
+    for index in range(6):
+        node.transport.events.put_nowait(TransportEvent("frame", index, bytes([index]), clock.value))
+    node.control_tick()
+    assert handled == [(0, b"\x00")]
+    assert node.transport.events.qsize() == 5
+    adapter_host_command(node, clock, 1)
+    assert node.core.snapshot.last_command_at == clock.value
+    for _ in range(5):
+        node.control_tick()
+    assert handled == [(index, bytes([index])) for index in range(6)]
+    assert node.transport.events.empty()

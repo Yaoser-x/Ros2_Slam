@@ -285,7 +285,14 @@ class STM32BridgeV3(Node):
 
     def control_tick(self) -> None:
         began = time.monotonic()
-        for event in self.transport.drain_events():
+        # Publishing a batch of sensor messages must not monopolize the ROS
+        # callback group and starve fresh Host commands. Never dequeue work
+        # beyond this tick's budget; remaining frames retain their order.
+        for _ in range(4):
+            events = self.transport.drain_events(limit=1)
+            if not events:
+                break
+            event = events[0]
             if event.kind == "connected":
                 self._on_connected()
             elif event.kind == "disconnected":
@@ -295,6 +302,8 @@ class STM32BridgeV3(Node):
                 self._publish_link_state()
             elif event.kind == "frame":
                 self._handle_frame(event.cmd, event.payload, event.received_at)
+            if time.monotonic() - began >= 0.004:
+                break
         now = time.monotonic()
         before = self.core.snapshot
         release, reason = self.core.tick(now)
