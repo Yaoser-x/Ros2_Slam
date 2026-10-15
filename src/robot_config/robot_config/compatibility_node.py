@@ -4,6 +4,7 @@
 from typing import Optional
 
 import rclpy
+from rclpy.impl.implementation_singleton import rclpy_implementation as _rclpy
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from robot_interfaces.msg import (
@@ -153,6 +154,11 @@ def main(args=None) -> None:
     node = PlatformCompatibilityNode()
     try:
         rclpy.spin(node)
+    except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
+        pass
+    except _rclpy.RCLError:
+        if node.context.ok():
+            raise
     finally:
         node.destroy_node()
         rclpy.try_shutdown()

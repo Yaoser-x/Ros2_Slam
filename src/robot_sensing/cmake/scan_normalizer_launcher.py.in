@@ -1,0 +1,8 @@
+#!/usr/bin/env python3
+"""Executable build artifact; the normalizer source only needs read access."""
+import os
+import runpy
+from ament_index_python.packages import get_package_share_directory
+
+runpy.run_path(os.path.join(get_package_share_directory("robot_sensing"),
+                           "runtime", "scan_normalizer.py"), run_name="__main__")

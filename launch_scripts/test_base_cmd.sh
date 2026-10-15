@@ -1,163 +1,127 @@
 #!/bin/bash
-
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROS_WS="${ROS_WS:-/home/robot/ros2_ws}"
-
-# shellcheck source=/home/robot/ros2_ws/launch_scripts/lib/common.sh
 source "${SCRIPT_DIR}/lib/common.sh"
 
-DETECT_BASE_PORT_SCRIPT="${SCRIPT_DIR}/detect_base_port.sh"
-STOP_ALL_SCRIPT="${SCRIPT_DIR}/stop_all.sh"
-
-BASE_PORT="${BASE_PORT:-/dev/serial0}"
+BASE_MODE="${ROBOT_BASE_MODE:-real}"
+BASE_PORT="${BASE_PORT:-${ROBOT_BASE_PORT_HINT:-}}"
 BASE_TEST_MODE="${BASE_TEST_MODE:-rotate}"
 BASE_TEST_LINEAR="${BASE_TEST_LINEAR:-0.08}"
 BASE_TEST_ANGULAR="${BASE_TEST_ANGULAR:-0.35}"
 BASE_TEST_ANGULAR_SERIES="${BASE_TEST_ANGULAR_SERIES:-0.35,0.7,1.0,1.5,2.0,3.0}"
 BASE_TEST_DURATION="${BASE_TEST_DURATION:-1.5}"
 BASE_TEST_PUBLISH_HZ="${BASE_TEST_PUBLISH_HZ:-10}"
-BASE_TEST_CMD_TIMEOUT="${BASE_TEST_CMD_TIMEOUT:-1.0}"
-BASE_TEST_KEEPALIVE="${BASE_TEST_KEEPALIVE:-0.10}"
 BASE_TEST_STOP_FIRST="${BASE_TEST_STOP_FIRST:-true}"
 BASE_TEST_COUNTDOWN="${BASE_TEST_COUNTDOWN:-5}"
+BASE_TEST_READY_TIMEOUT="${BASE_TEST_READY_TIMEOUT:-20}"
 BASE_TEST_LOG_DIR="${BASE_TEST_LOG_DIR:-/tmp/robot_base_test}"
 
 usage() {
     cat <<'EOF'
-Usage: ./test_base_cmd.sh [--base-port PORT] [--rotate-only|--with-linear|--calibrate-angular] [--no-stop-first]
+Usage: bash test_base_cmd.sh [--fake-base|--real-base] [--base-port PORT]
+                           [--rotate-only|--with-linear|--calibrate-angular] [--no-stop-first]
 
-Purpose:
-  Isolate upper-computer base control only:
-    ROS2 /cmd_vel/test -> robot_control -> /chassis/host_motion_command -> stm32_bridge -> STM32 -> /wheel/odom -> /odom
-
-Defaults:
-  /dev/serial0, rotate-only, angular=0.35rad/s, duration=1.5s, cmd_timeout=1.0s
-
-Environment overrides:
-  BASE_TEST_LINEAR=0.08
-  BASE_TEST_ANGULAR=0.35
-  BASE_TEST_ANGULAR_SERIES=0.35,0.7,1.0,1.5,2.0,3.0
-  BASE_TEST_DURATION=1.5
-  BASE_TEST_CMD_TIMEOUT=1.0
-  BASE_TEST_KEEPALIVE=0.10
+Runs the complete robot_bringup base_only chain with ROBOT_EFFECTIVE_PARAMS.
+Checks current-session link, compatibility, Host rearm, supervision and fresh odometry before motion.
+The default is real base, rotate-only, 0.35 rad/s for 1.5 s; fake base never accesses a serial device.
+Every phase must have actual odometry execution evidence; missing/incorrect motion exits nonzero.
 EOF
 }
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --base-port|--port)
-            if [ $# -lt 2 ]; then
-                log_error "missing value for $1"
-                exit 1
-            fi
-            BASE_PORT="$2"
-            shift 2
-            ;;
-        --rotate-only)
-            BASE_TEST_MODE="rotate"
-            shift
-            ;;
-        --with-linear)
-            BASE_TEST_MODE="linear"
-            shift
-            ;;
-        --calibrate-angular)
-            BASE_TEST_MODE="angular_sweep"
-            shift
-            ;;
-        --no-stop-first)
-            BASE_TEST_STOP_FIRST="false"
-            shift
-            ;;
-        -h|--help)
-            usage
-            exit 0
-            ;;
-        *)
-            log_error "unknown argument: $1"
-            usage
-            exit 1
-            ;;
+            [ $# -ge 2 ] || { log_error "missing value for $1"; exit 1; }
+            BASE_PORT="$2"; shift 2 ;;
+        --fake-base) BASE_MODE="fake"; shift ;;
+        --real-base) BASE_MODE="real"; shift ;;
+        --rotate-only) BASE_TEST_MODE="rotate"; shift ;;
+        --with-linear) BASE_TEST_MODE="linear"; shift ;;
+        --calibrate-angular) BASE_TEST_MODE="angular_sweep"; shift ;;
+        --no-stop-first) BASE_TEST_STOP_FIRST="false"; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) log_error "unknown argument: $1"; usage; exit 1 ;;
     esac
 done
 
+case "$BASE_MODE" in real|fake) ;; *) log_error "base mode must be real or fake"; exit 1 ;; esac
+if [ "${BASE_TEST_CMD_TIMEOUT+x}" = x ] || [ "${BASE_TEST_KEEPALIVE+x}" = x ]; then
+    log_error "BASE_TEST_CMD_TIMEOUT/BASE_TEST_KEEPALIVE are unsupported; use canonical compiled safety timing"
+    exit 2
+fi
+if [ -z "${ROBOT_EFFECTIVE_PARAMS:-}" ] || [ ! -f "$ROBOT_EFFECTIVE_PARAMS" ]; then
+    log_error "compiled ROBOT_EFFECTIVE_PARAMS is required; start through bin/robot base-test"
+    exit 1
+fi
 ensure_workspace_built
 setup_ros_env
+if ! command -v setsid >/dev/null 2>&1; then
+    log_error "setsid is required to isolate and clean up this base-test process group"
+    exit 2
+fi
+
+if [ "$BASE_MODE" = "real" ] && [ "$BASE_PORT" = "auto" ]; then
+    detected="$(bash "${SCRIPT_DIR}/detect_base_port.sh" --probe 2>/dev/null || true)"
+    [ -z "$detected" ] || BASE_PORT="$detected"
+fi
+if [ "$BASE_MODE" = "real" ] && [ -n "$BASE_PORT" ] && [ "$BASE_PORT" != "auto" ]; then
+    if [ ! -e "$BASE_PORT" ] || [ ! -r "$BASE_PORT" ] || [ ! -w "$BASE_PORT" ]; then
+        log_error "base port is not accessible: $BASE_PORT"
+        exit 1
+    fi
+fi
 
 mkdir -p "$BASE_TEST_LOG_DIR"
 STAMP="$(date +%Y%m%d_%H%M%S)"
-CONTROL_LOG="${BASE_TEST_LOG_DIR}/control_${STAMP}.log"
-BRIDGE_LOG="${BASE_TEST_LOG_DIR}/bridge_${STAMP}.log"
-STATE_LOG="${BASE_TEST_LOG_DIR}/state_${STAMP}.log"
-ODOM_LOG="${BASE_TEST_LOG_DIR}/odom_${STAMP}.log"
+LAUNCH_LOG="${BASE_TEST_LOG_DIR}/base_${STAMP}.log"
+READY_LOG="${BASE_TEST_LOG_DIR}/ready_${STAMP}.log"
 CMD_LOG="${BASE_TEST_LOG_DIR}/cmd_${STAMP}.log"
-
-CONTROL_PID=""
-BRIDGE_PID=""
-STATE_PID=""
-ODOM_PID=""
-
+LAUNCH_PID=""
 send_stop() {
-    ros2 topic pub --once /cmd_vel/test geometry_msgs/msg/Twist \
-        "{linear: {x: 0.0, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}" >/dev/null 2>&1 || true
+    timeout 3s ros2 topic pub --once /cmd_vel/test geometry_msgs/msg/Twist \
+        "{linear: {x: 0.0}, angular: {z: 0.0}}" >/dev/null 2>&1 || true
 }
-
 cleanup() {
+    trap - EXIT
+    trap '' INT TERM
     send_stop
-    if [ -n "$ODOM_PID" ] && kill -0 "$ODOM_PID" 2>/dev/null; then
-        kill "$ODOM_PID" 2>/dev/null || true
-        wait "$ODOM_PID" 2>/dev/null || true
-    fi
-    if [ -n "$BRIDGE_PID" ] && kill -0 "$BRIDGE_PID" 2>/dev/null; then
-        kill "$BRIDGE_PID" 2>/dev/null || true
-        wait "$BRIDGE_PID" 2>/dev/null || true
-    fi
-    if [ -n "$STATE_PID" ] && kill -0 "$STATE_PID" 2>/dev/null; then
-        kill "$STATE_PID" 2>/dev/null || true
-        wait "$STATE_PID" 2>/dev/null || true
-    fi
-    if [ -n "$CONTROL_PID" ] && kill -0 "$CONTROL_PID" 2>/dev/null; then
-        kill "$CONTROL_PID" 2>/dev/null || true
-        wait "$CONTROL_PID" 2>/dev/null || true
+    if [ -n "$LAUNCH_PID" ]; then
+        # setsid makes the launch PID the leader of this test's private process group.
+        # Address that group even if the launcher exited and descendants remain alive.
+        kill -INT -- "-$LAUNCH_PID" 2>/dev/null || true
+        local attempt
+        for ((attempt=0; attempt<20; attempt++)); do
+            kill -0 -- "-$LAUNCH_PID" 2>/dev/null || break
+            sleep 0.1
+        done
+        if kill -0 -- "-$LAUNCH_PID" 2>/dev/null; then
+            kill -TERM -- "-$LAUNCH_PID" 2>/dev/null || true
+            for ((attempt=0; attempt<20; attempt++)); do
+                kill -0 -- "-$LAUNCH_PID" 2>/dev/null || break
+                sleep 0.1
+            done
+        fi
+        if kill -0 -- "-$LAUNCH_PID" 2>/dev/null; then
+            kill -KILL -- "-$LAUNCH_PID" 2>/dev/null || true
+        fi
+        wait "$LAUNCH_PID" 2>/dev/null || true
     fi
 }
-
-trap cleanup EXIT INT TERM
-
-if [ "$BASE_PORT" = "auto" ] && [ -x "$DETECT_BASE_PORT_SCRIPT" ]; then
-    detected="$("$DETECT_BASE_PORT_SCRIPT" --probe 2>/dev/null || true)"
-    if [ -n "$detected" ]; then
-        BASE_PORT="$detected"
-    fi
-fi
-
-if [ "$BASE_PORT" != "auto" ] && [ ! -e "$BASE_PORT" ]; then
-    log_error "base port does not exist: $BASE_PORT"
-    exit 1
-fi
-if [ "$BASE_PORT" != "auto" ] && { [ ! -r "$BASE_PORT" ] || [ ! -w "$BASE_PORT" ]; }; then
-    log_error "base port is not readable/writable: $BASE_PORT"
-    log_warn "修复: sudo usermod -aG dialout \$USER && 重新登录；并确认 /dev/serial0 指向 /dev/ttyAMA0"
-    exit 1
-fi
+trap cleanup EXIT
+trap 'exit 130' INT TERM
 
 print_header "Base Command Test"
-log_info "This test starts robot_control, stm32_bridge and state estimation, then publishes low-speed /cmd_vel/test."
-log_info "Keep the robot lifted or in a clear open area. Press Ctrl-C to abort."
-log_info "base_port=${BASE_PORT}"
-log_info "mode=${BASE_TEST_MODE} duration=${BASE_TEST_DURATION}s publish_hz=${BASE_TEST_PUBLISH_HZ}"
-if [ "$BASE_TEST_MODE" = "angular_sweep" ]; then
-    log_info "angular_series=${BASE_TEST_ANGULAR_SERIES}"
+log_info "provider=${BASE_MODE} mode=${BASE_TEST_MODE}; effective_params=${ROBOT_EFFECTIVE_PARAMS}"
+log_info "Keep the real robot lifted or in a clear open area. Ctrl-C stops the test."
+if [ "$BASE_TEST_STOP_FIRST" = "true" ] && [ -f "${SCRIPT_DIR}/stop_all.sh" ]; then
+    bash "${SCRIPT_DIR}/stop_all.sh" >/dev/null 2>&1 || true
 fi
-log_info "cmd_timeout=${BASE_TEST_CMD_TIMEOUT}s keepalive=${BASE_TEST_KEEPALIVE}s"
-log_info "logs: ${BASE_TEST_LOG_DIR}"
-echo
-
-if [ "$BASE_TEST_STOP_FIRST" = "true" ] && [ -x "$STOP_ALL_SCRIPT" ]; then
-    "$STOP_ALL_SCRIPT" >/dev/null 2>&1 || true
-fi
+setsid ros2 launch robot_bringup base_only.launch.py \
+    base_mode:="${BASE_MODE}" base_port:="${BASE_PORT}" \
+    effective_params_file:="${ROBOT_EFFECTIVE_PARAMS}" >"$LAUNCH_LOG" 2>&1 &
+LAUNCH_PID="$!"
 
 for ((i=BASE_TEST_COUNTDOWN; i>0; i--)); do
     printf 'Starting motion test in %s seconds...\r' "$i"
@@ -165,81 +129,30 @@ for ((i=BASE_TEST_COUNTDOWN; i>0; i--)); do
 done
 printf '\n'
 
-ros2 launch robot_control control.launch.py >"$CONTROL_LOG" 2>&1 &
-CONTROL_PID="$!"
-
-ros2 launch stm32_robot_bridge stm32_bridge.launch.py \
-    port:="${BASE_PORT}" >"$BRIDGE_LOG" 2>&1 &
-BRIDGE_PID="$!"
-
-ros2 launch robot_state_estimation state_estimation.launch.py \
-    base_fusion_mode:=none \
-    effective_params_file:="${ROBOT_EFFECTIVE_PARAMS:-}" \
-    odom_topic:=/odom >"$STATE_LOG" 2>&1 &
-STATE_PID="$!"
-
-log_info "Waiting for robot_control, stm32_bridge and state estimation..."
-for _ in $(seq 1 20); do
-    if ros2 node list 2>/dev/null | grep -qx "/cmd_vel_mux" \
-        && ros2 node list 2>/dev/null | grep -qx "/stm32_bridge" \
-        && ros2 node list 2>/dev/null | grep -qx "/wheel_odometry"; then
-        break
-    fi
-    sleep 0.3
-done
-
-if ! ros2 node list 2>/dev/null | grep -qx "/stm32_bridge"; then
-    log_error "stm32_bridge did not start. See: $BRIDGE_LOG"
+if ! python3 "${SCRIPT_DIR}/base_test_readiness.py" --base-mode "$BASE_MODE" \
+        --effective-params "$ROBOT_EFFECTIVE_PARAMS" --timeout "$BASE_TEST_READY_TIMEOUT" >"$READY_LOG" 2>&1; then
+    log_error "base chain did not become business ready; see $READY_LOG and $LAUNCH_LOG"
     exit 1
 fi
-if ! ros2 node list 2>/dev/null | grep -qx "/cmd_vel_mux"; then
-    log_error "cmd_vel_mux did not start. See: $CONTROL_LOG"
+if ! kill -0 "$LAUNCH_PID" 2>/dev/null; then
+    log_error "base_only launch exited; see $LAUNCH_LOG"
     exit 1
 fi
-if ! ros2 node list 2>/dev/null | grep -qx "/wheel_odometry"; then
-    log_error "wheel_odometry did not start. See: $STATE_LOG"
+if ! python3 "${SCRIPT_DIR}/base_cmd_test_node.py" --mode "$BASE_TEST_MODE" \
+        --linear "$BASE_TEST_LINEAR" --angular "$BASE_TEST_ANGULAR" \
+        --angular-series "$BASE_TEST_ANGULAR_SERIES" --duration "$BASE_TEST_DURATION" \
+        --hz "$BASE_TEST_PUBLISH_HZ" >"$CMD_LOG" 2>&1; then
+    log_error "base command execution was not proven; see $CMD_LOG and $LAUNCH_LOG"
+    grep '^SUMMARY ' "$CMD_LOG" || true
     exit 1
 fi
-
-timeout 20s ros2 topic echo /odom >"$ODOM_LOG" 2>&1 &
-ODOM_PID="$!"
-
-log_info "Publishing deterministic /cmd_vel/test sequence..."
-python3 "${SCRIPT_DIR}/base_cmd_test_node.py" \
-    --mode "${BASE_TEST_MODE}" \
-    --linear "${BASE_TEST_LINEAR}" \
-    --angular "${BASE_TEST_ANGULAR}" \
-    --angular-series "${BASE_TEST_ANGULAR_SERIES}" \
-    --duration "${BASE_TEST_DURATION}" \
-    --hz "${BASE_TEST_PUBLISH_HZ}" >"$CMD_LOG" 2>&1
-
+if ! grep -q '^SUMMARY .*status=EXECUTED' "$CMD_LOG" \
+        || grep '^SUMMARY ' "$CMD_LOG" | grep -Ev 'status=(EXECUTED|STOPPED)$' >/dev/null; then
+    log_error "missing or unsuccessful actual execution summary; see $CMD_LOG"
+    exit 1
+fi
 send_stop
-sleep 2
-
-if kill -0 "$ODOM_PID" 2>/dev/null; then
-    kill "$ODOM_PID" 2>/dev/null || true
-    wait "$ODOM_PID" 2>/dev/null || true
-fi
-
-log_success "Base command test finished."
-echo "Bridge log: $BRIDGE_LOG"
-echo "Control log: $CONTROL_LOG"
-echo "State log:  $STATE_LOG"
-echo "Odom log:   $ODOM_LOG"
-echo "Cmd log:    $CMD_LOG"
-echo
-echo "Quantitative summary:"
-grep '^SUMMARY ' "$CMD_LOG" || echo "  (no summary lines found)"
-if grep -q '^CALIBRATION ' "$CMD_LOG"; then
-    echo
-    echo "Angular calibration:"
-    grep '^CALIBRATION ' "$CMD_LOG"
-fi
-echo
-if grep -q 'status=NO_ODOM' "$CMD_LOG"; then
-    log_warn "⚠ 至少一个测试阶段没有收到 /odom，当前测试不能证明底盘已正确执行。"
-    log_warn "  优先检查 stm32_bridge 是否真正启动、底盘是否上电、串口是否正确。"
-fi
-echo "Useful checks:"
-echo "  rg 'Opened STM32 serial|cmd_vel_rx|drive_tx|status_summary|control_source|enabled_mask|speed_valid_mask' $BRIDGE_LOG"
-echo "  tail -80 $BRIDGE_LOG"
+log_success "Base command test passed for provider=${BASE_MODE}; actual odometry confirmed every phase."
+printf 'Launch log: %s\nReady log: %s\nCommand log: %s\n' "$LAUNCH_LOG" "$READY_LOG" "$CMD_LOG"
+grep '^SUMMARY ' "$CMD_LOG"
+grep '^CALIBRATION ' "$CMD_LOG" || true

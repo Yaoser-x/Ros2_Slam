@@ -2,6 +2,7 @@
 
 import os
 import re
+import math
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -17,6 +18,7 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.actions import PushRosNamespace
+from robot_config.launch_config import load_launch_config
 
 
 def _package_exists(pkg_name: str) -> bool:
@@ -50,6 +52,8 @@ def _include(share: str, launch_name: str, arguments: dict):
 
 def _validate_and_compose(context):
     namespace = LaunchConfiguration("namespace").perform(context).strip("/")
+    if namespace:
+        raise RuntimeError("nonempty namespace is not supported by the current platform")
     mode = LaunchConfiguration("mode").perform(context)
     mapping_source = LaunchConfiguration("mapping_source").perform(context)
     use_rviz = LaunchConfiguration("use_rviz")
@@ -69,14 +73,16 @@ def _validate_and_compose(context):
     base_port_value = LaunchConfiguration("base_port").perform(context).strip()
     nav2_start = LaunchConfiguration("nav2_start").perform(context).lower() == "true"
     effective_params_file = LaunchConfiguration("effective_params_file").perform(context).strip()
+    slam_params_file = LaunchConfiguration("slam_params_file").perform(context).strip()
+    nav2_params_file = LaunchConfiguration("nav2_params_file").perform(context).strip()
 
-    if mode not in ("mapping", "navigation"):
-        raise RuntimeError("Invalid 'mode'. Use 'mapping' or 'navigation'.")
+    if mode not in ("mapping", "navigation", "base_only"):
+        raise RuntimeError("Invalid 'mode'. Use 'mapping', 'navigation' or 'base_only'.")
     if mapping_source != "lidar":
         raise RuntimeError("Invalid 'mapping_source'. Only 'lidar' is supported.")
     if base_mode not in ("real", "fake", "none"):
         raise RuntimeError("Invalid 'base_mode'. Use 'real', 'fake' or 'none'.")
-    if base_fusion_mode not in ("none", "ekf", "wheel", "wheel_imu"):
+    if base_fusion_mode and base_fusion_mode not in ("none", "ekf", "wheel", "wheel_imu"):
         raise RuntimeError("Invalid 'base_fusion_mode'. Use 'wheel' or 'wheel_imu'.")
     if auto_mapping_drive:
         raise RuntimeError(
@@ -89,6 +95,62 @@ def _validate_and_compose(context):
     real_base_enabled = base_mode == "real"
     fake_base_enabled = base_mode == "fake"
     no_base = base_mode == "none"
+    if mode == "base_only" and no_base:
+        raise RuntimeError("base_only requires a real or fake base provider")
+
+    effective = calibration = None
+    if effective_params_file:
+        effective, calibration = load_launch_config(effective_params_file)
+        compiled_port = effective["hardware"]["base_port"]
+        compiled_fusion = effective["runtime"]["fusion_mode"]
+        fusion_aliases = {"none": "wheel", "ekf": "wheel_imu"}
+        if base_port_value and base_port_value != compiled_port:
+            raise RuntimeError("base_port differs from compiled config; override through bin/robot")
+        if (
+            base_fusion_mode
+            and fusion_aliases.get(base_fusion_mode, base_fusion_mode) != compiled_fusion
+        ):
+            raise RuntimeError(
+                "base_fusion_mode differs from compiled config; override through bin/robot"
+            )
+        base_port_value, base_fusion_mode = compiled_port, compiled_fusion
+        if "base_mode" in effective["runtime"] and base_mode != effective["runtime"]["base_mode"]:
+            raise RuntimeError("base_mode differs from compiled config; override through bin/robot")
+        directory = os.path.dirname(effective_params_file)
+        slam_artifact = {
+            "quality": "slam-params.yaml",
+            "precision": "slam-precision-params.yaml",
+            "fast": "slam-fast-params.yaml",
+        }[effective["runtime"].get("slam_profile", "quality")]
+        for name, explicit, artifact in (
+            ("slam_params_file", slam_params_file, slam_artifact),
+            ("nav2_params_file", nav2_params_file, "nav2-params.yaml"),
+        ):
+            if explicit and os.path.realpath(explicit) != os.path.realpath(
+                os.path.join(directory, artifact)
+            ):
+                raise RuntimeError(f"{name} must be the compiled artifact")
+        slam_params_file = os.path.join(directory, slam_artifact)
+        nav2_params_file = os.path.join(directory, "nav2-params.yaml")
+        if lidar_enabled and os.path.realpath(lidar_params_file) != os.path.realpath(
+            os.path.join(os.path.dirname(effective_params_file), "lidar-params.yaml")
+        ):
+            raise RuntimeError("lidar params must be the compiled artifact")
+        for names, values in (
+            (("x", "y", "z"), calibration["lidar"]["translation"]),
+            (("roll", "pitch", "yaw"), calibration["lidar"]["rotation"]),
+        ):
+            for name, compiled_value in zip(names, values):
+                explicit = LaunchConfiguration(f"lidar_tf_{name}").perform(context).strip()
+                if explicit:
+                    try:
+                        matches = math.isclose(float(explicit), compiled_value, abs_tol=1e-12)
+                    except ValueError:
+                        matches = False
+                    if not matches:
+                        raise RuntimeError(
+                            f"lidar_tf_{name} differs from compiled config; override through bin/robot"
+                        )
 
     if real_base_enabled or fake_base_enabled:
         if not effective_params_file or not os.path.isfile(effective_params_file):
@@ -120,12 +182,32 @@ def _validate_and_compose(context):
             "description.launch.py",
             {
                 "use_lidar": "true" if lidar_enabled else "false",
-                "lidar_tf_x": LaunchConfiguration("lidar_tf_x"),
-                "lidar_tf_y": LaunchConfiguration("lidar_tf_y"),
-                "lidar_tf_z": LaunchConfiguration("lidar_tf_z"),
-                "lidar_tf_roll": LaunchConfiguration("lidar_tf_roll"),
-                "lidar_tf_pitch": LaunchConfiguration("lidar_tf_pitch"),
-                "lidar_tf_yaw": LaunchConfiguration("lidar_tf_yaw"),
+                **(
+                    {
+                        "base_frame": calibration["frames"]["base"],
+                        "imu_frame": calibration["frames"]["imu"],
+                        "laser_frame": calibration["frames"]["laser"],
+                        **{
+                            f"lidar_tf_{name}": str(calibration["lidar"]["translation"][index])
+                            for index, name in enumerate(("x", "y", "z"))
+                        },
+                        **{
+                            f"lidar_tf_{name}": str(calibration["lidar"]["rotation"][index])
+                            for index, name in enumerate(("roll", "pitch", "yaw"))
+                        },
+                    }
+                    if calibration
+                    else {
+                        f"lidar_tf_{name}": (
+                            LaunchConfiguration(f"lidar_tf_{name}").perform(context).strip()
+                            or default
+                        )
+                        for name, default in zip(
+                            ("x", "y", "z", "roll", "pitch", "yaw"),
+                            ("0.07", "0.0", "0.13", "0.0", "0.0", "1.570796326795"),
+                        )
+                    }
+                ),
             },
         ),
         _include(
@@ -162,7 +244,8 @@ def _validate_and_compose(context):
                 executable="chassis_ops_node",
                 name="chassis_ops",
                 parameters=[
-                    {"wire_adapter_name": "fake_base" if fake_base_enabled else "stm32_bridge"}
+                    effective_params_file,
+                    {"wire_adapter_name": "fake_base" if fake_base_enabled else "stm32_bridge"},
                 ],
                 output="screen",
             )
@@ -182,7 +265,7 @@ def _validate_and_compose(context):
                 "stm32_bridge.launch.py",
                 {
                     "params_file": LaunchConfiguration("effective_params_file"),
-                    "port": LaunchConfiguration("base_port"),
+                    "port": base_port_value,
                 },
             )
         )
@@ -205,10 +288,12 @@ def _validate_and_compose(context):
                 state_share,
                 "state_estimation.launch.py",
                 {
-                    "base_fusion_mode": LaunchConfiguration("base_fusion_mode"),
+                    "base_fusion_mode": base_fusion_mode,
                     "effective_params_file": LaunchConfiguration("effective_params_file"),
-                    "odom_topic": "odom",
-                    "ekf_wheel_imu_params_file": LaunchConfiguration("base_ekf_params_file"),
+                    "odom_topic": effective["platform"]["topics"]["odom"],
+                    "ekf_wheel_imu_params_file": os.path.join(
+                        os.path.dirname(effective_params_file), "ekf-wheel-imu.yaml"
+                    ),
                 },
             )
         )
@@ -226,7 +311,16 @@ def _validate_and_compose(context):
                 package="tf2_ros",
                 executable="static_transform_publisher",
                 name="odom_fallback_static_tf",
-                arguments=["0", "0", "0", "0", "0", "0", "odom", "base_link"],
+                arguments=[
+                    "0",
+                    "0",
+                    "0",
+                    "0",
+                    "0",
+                    "0",
+                    effective["platform"]["frames"]["odom"] if effective else "odom",
+                    effective["platform"]["frames"]["base"] if effective else "base_link",
+                ],
                 output="screen",
             )
         )
@@ -240,13 +334,14 @@ def _validate_and_compose(context):
                 this_share,
                 "slam.launch.py",
                 {
-                    "slam_params_file": LaunchConfiguration("slam_params_file"),
+                    "slam_params_file": slam_params_file
+                    or os.path.join(this_share, "config", "slam_toolbox_mapping.yaml"),
                     "use_sim_time": LaunchConfiguration("use_sim_time"),
                     "scan_topic": LaunchConfiguration("lidar_scan_topic"),
                 },
             )
         )
-    else:
+    elif mode == "navigation":
         actions.append(LogInfo(msg=f"[robot_bringup] mode=navigation, base_mode={base_mode}"))
         if no_base:
             raise RuntimeError("Navigation mode requires base_mode:=real or base_mode:=fake.")
@@ -262,6 +357,7 @@ def _validate_and_compose(context):
                 executable="navigation_guard_node",
                 name="navigation_guard",
                 output="screen",
+                parameters=[effective_params_file],
             )
         )
         actions.append(
@@ -271,7 +367,7 @@ def _validate_and_compose(context):
                 {
                     "map_file": LaunchConfiguration("map_file"),
                     "use_sim_time": LaunchConfiguration("use_sim_time"),
-                    "params_file": LaunchConfiguration("nav2_params_file"),
+                    "params_file": nav2_params_file,
                     "autostart": LaunchConfiguration("nav2_autostart"),
                 },
             )
@@ -283,10 +379,10 @@ def _validate_and_compose(context):
                     "nav2.launch.py",
                     {
                         "use_sim_time": LaunchConfiguration("use_sim_time"),
-                        "params_file": LaunchConfiguration("nav2_params_file"),
+                        "params_file": nav2_params_file,
                         "default_bt_xml_filename": LaunchConfiguration("nav2_bt_xml_file"),
                         "autostart": LaunchConfiguration("nav2_autostart"),
-                        "cmd_vel_topic": "/cmd_vel/nav",
+                        "cmd_vel_topic": "cmd_vel/nav",
                     },
                 )
             )
@@ -340,15 +436,15 @@ def generate_launch_description():
             DeclareLaunchArgument("lidar_scan_angle_min", default_value=str(-3.141592653589793)),
             DeclareLaunchArgument("lidar_scan_angle_max", default_value=str(3.141592653589793)),
             DeclareLaunchArgument("lidar_scan_normalizer_log_interval_sec", default_value="30.0"),
-            DeclareLaunchArgument("lidar_tf_x", default_value="0.07"),
-            DeclareLaunchArgument("lidar_tf_y", default_value="0.0"),
-            DeclareLaunchArgument("lidar_tf_z", default_value="0.13"),
-            DeclareLaunchArgument("lidar_tf_roll", default_value="0.0"),
-            DeclareLaunchArgument("lidar_tf_pitch", default_value="0.0"),
-            DeclareLaunchArgument("lidar_tf_yaw", default_value="1.570796326795"),
+            DeclareLaunchArgument("lidar_tf_x", default_value=""),
+            DeclareLaunchArgument("lidar_tf_y", default_value=""),
+            DeclareLaunchArgument("lidar_tf_z", default_value=""),
+            DeclareLaunchArgument("lidar_tf_roll", default_value=""),
+            DeclareLaunchArgument("lidar_tf_pitch", default_value=""),
+            DeclareLaunchArgument("lidar_tf_yaw", default_value=""),
             DeclareLaunchArgument(
                 "slam_params_file",
-                default_value=os.path.join(rb_share, "config", "slam_toolbox_mapping.yaml"),
+                default_value="",
             ),
             DeclareLaunchArgument("map_file", default_value=""),
             DeclareLaunchArgument("auto_mapping_drive", default_value="false"),
@@ -378,14 +474,14 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument("auto_mapping_side_stop_distance", default_value="0.10"),
             DeclareLaunchArgument("auto_mapping_side_resume_distance", default_value="0.18"),
-            DeclareLaunchArgument("base_port", default_value="/dev/serial0"),
-            DeclareLaunchArgument("base_fusion_mode", default_value="wheel"),
+            DeclareLaunchArgument("base_port", default_value=""),
+            DeclareLaunchArgument("base_fusion_mode", default_value=""),
             DeclareLaunchArgument("fake_base_scenario", default_value="normal"),
             DeclareLaunchArgument(
                 "base_ekf_params_file",
                 default_value=os.path.join(state_share, "config", "ekf_base.yaml"),
             ),
-            DeclareLaunchArgument("nav2_params_file", default_value=default_nav2_params),
+            DeclareLaunchArgument("nav2_params_file", default_value=""),
             DeclareLaunchArgument(
                 "nav2_bt_xml_file",
                 default_value=os.path.join(

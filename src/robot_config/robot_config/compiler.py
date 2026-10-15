@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import shlex
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping
@@ -228,6 +229,16 @@ def validate_effective_config(config: Mapping[str, Any]) -> None:
             abs_tol=1.0e-12,
         ):
             raise ConfigError(f"calibration bundle geometry differs at {bundle_name}")
+    lidar = calibration["lidar"]
+    if (
+        bundle["lidar"]["translation"] != lidar["translation_m"]
+        or bundle["lidar"]["rotation"] != lidar["rotation_rpy_rad"]
+        or bundle["lidar"]["frame"] != config["platform"]["frames"]["laser"]
+        or lidar["frame"] != config["platform"]["frames"]["laser"]
+    ):
+        raise ConfigError(
+            "calibration bundle lidar differs from canonical lidar calibration/frames"
+        )
     imu = calibration.get("imu", {})
     for name in ("angular_velocity_stddev", "linear_acceleration_stddev"):
         values = imu.get(name, ())
@@ -457,6 +468,29 @@ def ros_parameters(config: Mapping[str, Any]) -> dict[str, Any]:
                 "compatibility_state_topic": topics["platform_compatibility_state"],
                 "wheel_observation_topic": topics["wheel_observation"],
                 "evidence_max_age_sec": timing["status_timeout_sec"],
+                "compatibility_timeout_sec": timing["status_timeout_sec"],
+            }
+        },
+        "navigation_guard": {
+            "ros__parameters": {
+                "state_timeout_sec": timing["status_timeout_sec"],
+                "backend_response_timeout_sec": 1.0,
+                "goal_pose_topic": "goal_pose",
+                "chassis_link_state_topic": topics["chassis_link_state"],
+                "firmware_control_state_topic": topics["firmware_control_state"],
+                "motion_supervision_topic": topics["motion_supervision_state"],
+                "compatibility_state_topic": topics["platform_compatibility_state"],
+                "host_control_state_topic": topics["host_control_state"],
+                "navigation_guard_state_topic": topics["navigation_guard_state"],
+            }
+        },
+        "chassis_ops": {
+            "ros__parameters": {
+                "operation_timeout_sec": 1.0,
+                "state_timeout_sec": timing["status_timeout_sec"],
+                "firmware_control_state_topic": topics["firmware_control_state"],
+                "firmware_info_topic": topics["firmware_info"],
+                "chassis_link_state_topic": topics["chassis_link_state"],
             }
         },
         "motion_supervisor": {
@@ -508,6 +542,7 @@ def ros_parameters(config: Mapping[str, Any]) -> dict[str, Any]:
                 "max_linear_jerk": motion["max_linear_jerk_mps3"],
                 "max_angular_jerk": motion["max_angular_jerk_radps3"],
                 "timeout_sec": timing["mux_source_timeout_sec"],
+                "nav_guard_timeout_sec": timing["status_timeout_sec"],
                 "publish_hz": 1.0 / timing["host_publish_period_sec"],
                 "command_deadline_sec": timing["host_command_deadline_sec"],
                 "command_lifespan_sec": timing["host_command_lifespan_sec"],
@@ -518,6 +553,7 @@ def ros_parameters(config: Mapping[str, Any]) -> dict[str, Any]:
                 "require_motion_supervision": True,
                 "supervision_timeout_sec": timing["status_timeout_sec"],
                 "rearm_quiet_sec": timing["mux_source_timeout_sec"],
+                "rearm_disable_retry_sec": timing["host_publish_period_sec"],
             }
         },
     }
@@ -614,6 +650,10 @@ def _write_fsynced(path: Path, content: str) -> None:
 
 
 def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        # Windows does not expose directory fsync; files are still flushed
+        # before the atomic rename.  Linux deployment retains directory fsync.
+        return
     descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
         os.fsync(descriptor)
@@ -625,31 +665,73 @@ def _render_component_artifacts(
     config_root: Path, output_dir: Path, effective: Mapping[str, Any]
 ) -> None:
     components = config_root / "components"
+    frames = effective["platform"]["frames"]
+    topics = effective["platform"]["topics"]
+    runtime = effective["runtime"]
+
+    def render_platform_fields(value):
+        if not isinstance(value, dict):
+            return
+        for key, child in value.items():
+            if isinstance(child, dict):
+                render_platform_fields(child)
+            elif key in ("base_frame", "base_frame_id", "robot_base_frame", "base_link_frame"):
+                value[key] = frames["base"]
+            elif key in ("odom_frame", "odom_frame_id"):
+                value[key] = frames["odom"]
+            elif key in ("map_frame", "global_frame", "global_frame_id"):
+                value[key] = frames["odom"] if child == "odom" else frames["map"]
+            elif key == "odom_topic":
+                value[key] = topics["odom"]
+            elif key == "footprint":
+                value[key] = json.dumps(effective["hardware"]["footprint_m"])
+            elif key in ("scan_topic", "topic") and child == "/scan":
+                value[key] = "scan"
+
+    lidar = _load(components / "lidar.yaml")
+    lidar_params = lidar["ydlidar_ros2_driver_node"]["ros__parameters"]
+    lidar_params["port"] = effective["hardware"]["lidar_port"]
+    lidar_params["frame_id"] = frames["laser"]
+    for name in ("inverted", "reversion"):
+        if f"lidar_{name}" in runtime:
+            lidar_params[name] = runtime[f"lidar_{name}"]
     _write_fsynced(
         output_dir / "lidar-params.yaml",
-        yaml.safe_dump(_load(components / "lidar.yaml"), sort_keys=False),
+        yaml.safe_dump(lidar, sort_keys=False),
     )
     slam_base = _load(components / "slam" / "base.yaml")
     nav2 = _merge(
         _load(components / "nav2" / "base.yaml"),
         _load(components / "nav2" / "navigation.yaml").get("overlay", {}),
     )
+    render_platform_fields(nav2)
     for profile, output_name in (
         ("quality.yaml", "slam-params.yaml"),
         ("high_resolution_experimental.yaml", "slam-precision-params.yaml"),
         ("legacy_fast_experimental.yaml", "slam-fast-params.yaml"),
     ):
         slam = _merge(slam_base, _load(components / "slam" / profile).get("overlay", {}))
+        render_platform_fields(slam)
         _write_fsynced(output_dir / output_name, yaml.safe_dump(slam, sort_keys=False))
     _write_fsynced(output_dir / "nav2-params.yaml", yaml.safe_dump(nav2, sort_keys=False))
-    _write_fsynced(
-        output_dir / "ekf-wheel.yaml",
-        yaml.safe_dump(_load(components / "ekf" / "wheel.yaml"), sort_keys=False),
-    )
-    _write_fsynced(
-        output_dir / "ekf-wheel-imu.yaml",
-        yaml.safe_dump(_load(components / "ekf" / "wheel_imu.yaml"), sort_keys=False),
-    )
+    for source, artifact in (
+        ("wheel.yaml", "ekf-wheel.yaml"),
+        ("wheel_imu.yaml", "ekf-wheel-imu.yaml"),
+    ):
+        ekf = _load(components / "ekf" / source)
+        params = ekf["/**"]["ros__parameters"]
+        if params.get("publish_tf") is not False:
+            raise ConfigError("EKF must not publish the formal odometry TF")
+        params.update(
+            map_frame=frames["map"],
+            odom_frame=frames["odom"],
+            base_link_frame=frames["base"],
+            world_frame=frames["odom"],
+            odom0=topics["wheel_odom"],
+        )
+        if "imu0" in params:
+            params["imu0"] = topics["imu"]
+        _write_fsynced(output_dir / artifact, yaml.safe_dump(ekf, sort_keys=False))
     calibration = effective["calibration_bundle"]
     launch_args = {
         "schema_version": 1,
@@ -661,6 +743,19 @@ def _render_component_artifacts(
     _write_fsynced(
         output_dir / "launch-calibration.yaml",
         yaml.safe_dump(launch_args, sort_keys=False),
+    )
+    launch_environment = {
+        "BASE_PORT": effective["hardware"]["base_port"],
+        "LIDAR_TF_YAW": calibration["lidar"]["rotation"][2],
+        "ROBOT_BASE_MODE": runtime.get("base_mode", "real"),
+        "ROBOT_BASE_FUSION_MODE": runtime["fusion_mode"],
+    }
+    _write_fsynced(
+        output_dir / "launch-env.sh",
+        "".join(
+            f"export {name}={shlex.quote(str(value))}\n"
+            for name, value in launch_environment.items()
+        ),
     )
 
 

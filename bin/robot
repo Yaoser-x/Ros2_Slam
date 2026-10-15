@@ -5,8 +5,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMMAND="${1:-help}"
 PROFILE="mapping"
 case "$COMMAND" in
-  navigation) PROFILE="navigation" ;;
-  doctor|check|base|base-test) PROFILE="diagnostics" ;;
+  navigation|nav) PROFILE="navigation" ;;
+  doctor|check|base|base-test|bridge|test-base|check-system|check-lidar) PROFILE="diagnostics" ;;
 esac
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-${PROFILE}-$$"
 RUN_DIR="${ROBOT_DATA_ROOT:-/home/robot/robot_data}/runs/${RUN_ID}"
@@ -14,10 +14,13 @@ mkdir -p "$RUN_DIR"
 CONFIG_DIR="${RUN_DIR}/config"
 
 export PYTHONPATH="${ROOT}/src/robot_config:${PYTHONPATH:-}"
+export ROS_WS="$ROOT"
 python3 -m robot_config.compile_config \
   --config-root "${ROOT}/src/robot_config/config" \
   --output-dir "$CONFIG_DIR" \
-  --profile "$PROFILE" >/dev/null
+  --profile "$PROFILE" --runtime-args "$@" >/dev/null
+# shellcheck disable=SC1091
+source "${CONFIG_DIR}/launch-env.sh"
 export ROBOT_EFFECTIVE_PARAMS="${CONFIG_DIR}/ros-params.yaml"
 export ROBOT_EFFECTIVE_CONFIG="${CONFIG_DIR}/effective-config.yaml"
 export ROBOT_SLAM_PARAMS_QUALITY="${CONFIG_DIR}/slam-params.yaml"
@@ -25,6 +28,8 @@ export ROBOT_SLAM_PARAMS_PRECISION="${CONFIG_DIR}/slam-precision-params.yaml"
 export ROBOT_SLAM_PARAMS_FAST="${CONFIG_DIR}/slam-fast-params.yaml"
 export ROBOT_NAV2_PARAMS="${CONFIG_DIR}/nav2-params.yaml"
 export ROBOT_LIDAR_PARAMS="${CONFIG_DIR}/lidar-params.yaml"
+export ROBOT_LAUNCH_CALIBRATION="${CONFIG_DIR}/launch-calibration.yaml"
+export ROBOT_EKF_PARAMS="${CONFIG_DIR}/ekf-wheel-imu.yaml"
 echo "effective config: ${ROBOT_EFFECTIVE_CONFIG}"
 echo "ROS params:       ${ROBOT_EFFECTIVE_PARAMS}"
 exec bash "${ROOT}/launch_scripts/robot.sh" "$@"

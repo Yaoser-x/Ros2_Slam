@@ -1,4 +1,5 @@
 from pathlib import Path
+import importlib.util
 import subprocess
 
 
@@ -119,7 +120,6 @@ def test_build_script_sources_ros_with_nounset_disabled() -> None:
 
 def test_colcon_entrypoints_only_discover_packages_under_src() -> None:
     entrypoints = (
-        ROOT / ".github" / "workflows" / "ci.yml",
         ROOT / "scripts" / "build" / "build_ros_ws.sh",
         ROOT / "scripts" / "verify" / "verify_upper.sh",
     )
@@ -128,6 +128,26 @@ def test_colcon_entrypoints_only_discover_packages_under_src() -> None:
         content = path.read_text(encoding="utf-8")
         assert "colcon build --base-paths src" in content, path
         assert "colcon test --base-paths src" in content, path
+
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert "python3 scripts/verify/run_software_evidence.py" in workflow
+    spec = importlib.util.spec_from_file_location(
+        "software_evidence_colcon_boundary", ROOT / "scripts/verify/run_software_evidence.py"
+    )
+    runner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runner)
+    commands, _ = runner.commands("ros_ci", ROOT / "build/boundary-report")
+    for name in ("colcon_build", "colcon_test"):
+        argv = commands[name]
+        assert "colcon" in argv, name
+        assert argv[argv.index("colcon") + 1] == name.removeprefix("colcon_"), name
+        assert argv.count("--base-paths") == 1, name
+        discovered_paths = []
+        for argument in argv[argv.index("--base-paths") + 1 :]:
+            if argument.startswith("-"):
+                break
+            discovered_paths.append(argument)
+        assert discovered_paths == ["src"], name
 
 
 def test_gitattributes_keeps_shell_scripts_lf() -> None:

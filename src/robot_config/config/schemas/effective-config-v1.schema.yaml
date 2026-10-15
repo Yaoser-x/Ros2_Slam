@@ -267,3 +267,7 @@ properties:
       fusion_mode: {enum: [wheel, wheel_imu]}
       slam_profile: {type: string}
       nav2_profile: {type: string}
+      base_mode: {enum: [real, fake, none]}
+      cli_args: {type: array, items: {type: string}}
+      lidar_inverted: {type: boolean}
+      lidar_reversion: {type: boolean}

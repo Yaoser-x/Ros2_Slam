@@ -38,7 +38,6 @@ DEFAULT_LIDAR_RVIZ="${ROS_WS}/src/robot_bringup/rviz/lidar_mapping.rviz"
 DEFAULT_SYSTEM_RVIZ="${ROS_WS}/src/robot_bringup/rviz/system.rviz"
 DEFAULT_LIDAR_TF_YAW_RAD="1.570796326795"
 DEFAULT_BASE_PORT="/dev/serial0"
-DEFAULT_BASE_WHEEL_TRACK_WIDTH="0.1760"
 
 TMP_FILES=()
 
@@ -128,6 +127,10 @@ resolve_base_port() {
     local port="$1"
 
     if [ "$port" = "auto" ]; then
+        if [ -n "${ROBOT_EFFECTIVE_PARAMS:-}" ]; then
+            log_error "compiled base_port cannot be auto; set hardware.base_port or --base-port" >&2
+            return 1
+        fi
         log_warn "base_port=auto 已废弃；当前底盘默认使用 Raspberry Pi GPIO UART ${DEFAULT_BASE_PORT}" >&2
         printf '%s\n' "${ROBOT_BASE_PORT_HINT:-$DEFAULT_BASE_PORT}"
         return 0
@@ -155,6 +158,10 @@ resolve_base_port_avoiding_lidar() {
     if [ "$requested_base_port" != "auto" ]; then
         resolved_base="$(resolve_port "$requested_base_port")"
         if [ "$resolved_base" = "$resolved_lidar" ]; then
+            if [ -n "${ROBOT_EFFECTIVE_PARAMS:-}" ]; then
+                log_error "compiled base and lidar ports conflict; recompile with --base-port" >&2
+                return 1
+            fi
             if [ "$base_port_explicit" = true ]; then
                 log_error "✗ 底盘串口和雷达串口相同: ${requested_base_port}"
                 log_error "  雷达已经占用 ${lidar_port}，请用 --base-port 指定另一个 STM32 串口，或交换 USB 后重试。"
@@ -207,6 +214,17 @@ prepare_lidar_params_with_runtime_overrides() {
     local port_override="${4:-}"
     local tmp_file=""
 
+    if [ -n "${ROBOT_EFFECTIVE_CONFIG:-}" ]; then
+        if { [ -n "$reversion_override" ] && [ "$(get_yaml_key_value "$params_file" reversion)" != "$reversion_override" ]; } \
+            || { [ -n "$inverted_override" ] && [ "$(get_yaml_key_value "$params_file" inverted)" != "$inverted_override" ]; } \
+            || { [ -n "$port_override" ] && [ "$(get_yaml_key_value "$params_file" port)" != "$port_override" ]; }; then
+            log_error "雷达覆写与已编译配置不一致，请通过 bin/robot 重新编译。"
+            return 1
+        fi
+        printf '%s\n' "$params_file"
+        return 0
+    fi
+
     if [ -z "$reversion_override" ] && [ -z "$inverted_override" ] && [ -z "$port_override" ]; then
         printf '%s\n' "$params_file"
         return 0
@@ -249,13 +267,18 @@ resolve_lidar_params_device() {
         return 0
     fi
 
+    if [ -n "${ROBOT_EFFECTIVE_CONFIG:-}" ]; then
+        log_error "已编译雷达设备不存在: $configured_port；请使用 --lidar-port 重新编译。"
+        return 1
+    fi
+
     if [ -n "$explicit_port_override" ]; then
         log_error "✗ 指定的雷达设备不存在: ${configured_port}"
         exit 1
     fi
 
-    if [ -x "$DETECT_LIDAR_PORT_SCRIPT" ]; then
-        detected_port="$("$DETECT_LIDAR_PORT_SCRIPT" "$configured_port" 2>/dev/null || true)"
+    if [ -f "$DETECT_LIDAR_PORT_SCRIPT" ]; then
+        detected_port="$(bash "$DETECT_LIDAR_PORT_SCRIPT" "$configured_port" 2>/dev/null || true)"
     fi
 
     if [ -n "$detected_port" ] && [ -e "$detected_port" ]; then
@@ -339,9 +362,9 @@ deg_to_rad() {
 }
 
 stop_existing_sessions() {
-    if [ -x "$STOP_ALL_SCRIPT" ]; then
+    if [ -f "$STOP_ALL_SCRIPT" ]; then
         log_info "清理旧 ROS2 会话..."
-        "$STOP_ALL_SCRIPT" >/dev/null 2>&1 || true
+        bash "$STOP_ALL_SCRIPT" >/dev/null 2>&1 || true
         sleep 1
     fi
 }
@@ -391,7 +414,7 @@ run_mapping() {
     local slam_profile="auto"
     local skip_lidar_check=false
     local use_rviz=false
-    local base_mode="none"
+    local base_mode="${ROBOT_BASE_MODE:-none}"
     local base_port="${BASE_PORT:-$DEFAULT_BASE_PORT}"
     local has_source=false
     local has_profile=false
@@ -399,12 +422,7 @@ run_mapping() {
     local lidar_params=""
     local rviz_config="$DEFAULT_SYSTEM_RVIZ"
     local use_base_arg="false"
-    local base_fusion_mode="none"
-    local base_wheel_track_width="${BASE_WHEEL_TRACK_WIDTH:-$DEFAULT_BASE_WHEEL_TRACK_WIDTH}"
-    local base_odom_angular_scale="${BASE_ODOM_ANGULAR_SCALE:-1.0}"
-    local base_odom_angular_sign="${BASE_ODOM_ANGULAR_SIGN:-1.0}"
-    local base_status_log_interval_sec="${BASE_STATUS_LOG_INTERVAL_SEC:-0.0}"
-    local base_cmd_log_interval_sec="${BASE_CMD_LOG_INTERVAL_SEC:-0.0}"
+    local base_fusion_mode="${ROBOT_BASE_FUSION_MODE:-wheel}"
     local auto_mapping_drive="false"
     local auto_mapping_nav2_params="${AUTO_MAPPING_NAV2_PARAMS:-$DEFAULT_NAV2_MAPPING_PARAMS}"
     local auto_mapping_max_duration_sec="${AUTO_MAPPING_MAX_DURATION_SEC:-180.0}"
@@ -587,9 +605,9 @@ run_mapping() {
         lidar_port="$(get_yaml_key_value "$lidar_params" "port" || true)"
         ensure_lidar_port_access "$lidar_port"
         export ROBOT_LIDAR_PORT_HINT="$lidar_port"
-        if [ "$skip_lidar_check" = false ] && [ -x "$LIDAR_HEALTH_SCRIPT" ]; then
+        if [ "$skip_lidar_check" = false ] && [ -f "$LIDAR_HEALTH_SCRIPT" ]; then
             log_info "执行雷达数据健康检查..."
-            "$LIDAR_HEALTH_SCRIPT" "$lidar_params"
+            bash "$LIDAR_HEALTH_SCRIPT" "$lidar_params"
         fi
     fi
 
@@ -598,19 +616,6 @@ run_mapping() {
         export ROBOT_BASE_PORT_HINT="$base_port"
     fi
 
-    if [ "$mapping_source" = "lidar" ] && [ "$base_mode" = "real" ]; then
-        base_odom_angular_scale="${BASE_ODOM_ANGULAR_SCALE:-1.0}"
-        if [ "${BASE_STATUS_LOG_INTERVAL_SEC:-}" = "" ]; then
-            base_status_log_interval_sec="5.0"
-        fi
-    fi
-
-    if [ "$auto_mapping_drive" = "true" ] && [ "${BASE_STATUS_LOG_INTERVAL_SEC:-}" = "" ]; then
-        base_status_log_interval_sec="10.0"
-    fi
-    if [ "$auto_mapping_drive" = "true" ] && [ "${BASE_CMD_LOG_INTERVAL_SEC:-}" = "" ]; then
-        base_cmd_log_interval_sec="5.0"
-    fi
     if [ "$auto_mapping_drive" = "true" ]; then
         require_existing_file "$auto_mapping_nav2_params" "自动建图 Nav2 参数文件"
     fi
@@ -686,11 +691,6 @@ run_mapping() {
         use_base:=${use_base_arg} \
         base_port:=${base_port} \
         base_fusion_mode:=${base_fusion_mode} \
-        base_wheel_track_width:=${base_wheel_track_width} \
-        base_odom_angular_scale:=${base_odom_angular_scale} \
-        base_odom_angular_sign:=${base_odom_angular_sign} \
-        base_status_log_interval_sec:=${base_status_log_interval_sec} \
-        base_cmd_log_interval_sec:=${base_cmd_log_interval_sec} \
         auto_mapping_drive:=${auto_mapping_drive} \
         auto_mapping_nav2_params_file:=${auto_mapping_nav2_params} \
         auto_mapping_max_duration_sec:=${auto_mapping_max_duration_sec} \
@@ -720,16 +720,9 @@ run_mapping() {
 
 run_navigation() {
     local map_file="$DEFAULT_MAP"
-    local base_mode="real"
+    local base_mode="${ROBOT_BASE_MODE:-real}"
     local base_port="${BASE_PORT:-$DEFAULT_BASE_PORT}"
-    local base_fusion_mode="none"
-    local base_wheel_track_width="${BASE_WHEEL_TRACK_WIDTH:-$DEFAULT_BASE_WHEEL_TRACK_WIDTH}"
-    local base_odom_angular_scale="${BASE_ODOM_ANGULAR_SCALE:-1.0}"
-    local base_odom_angular_sign="${BASE_ODOM_ANGULAR_SIGN:-1.0}"
-    local base_status_log_interval_sec="${BASE_STATUS_LOG_INTERVAL_SEC:-5.0}"
-    local base_cmd_log_interval_sec="${BASE_CMD_LOG_INTERVAL_SEC:-0.0}"
-    local base_cmd_timeout="${BASE_CMD_TIMEOUT:-0.15}"
-    local base_drive_keepalive_sec="${BASE_DRIVE_KEEPALIVE_SEC:-0.05}"
+    local base_fusion_mode="${ROBOT_BASE_FUSION_MODE:-wheel}"
     local use_rviz=false
     local skip_lidar_check=false
     local lidar_params=""
@@ -905,9 +898,9 @@ run_navigation() {
         export ROBOT_BASE_PORT_HINT="$base_port"
     fi
 
-    if [ "$skip_lidar_check" = false ] && [ -x "$LIDAR_HEALTH_SCRIPT" ]; then
+    if [ "$skip_lidar_check" = false ] && [ -f "$LIDAR_HEALTH_SCRIPT" ]; then
         log_info "执行雷达数据健康检查..."
-        "$LIDAR_HEALTH_SCRIPT" "$lidar_params"
+        bash "$LIDAR_HEALTH_SCRIPT" "$lidar_params"
     fi
 
     stop_existing_sessions
@@ -937,9 +930,8 @@ run_navigation() {
     if [ "$base_mode" = "real" ]; then
         log_info "底盘串口: ${base_port}"
         log_info "底盘融合模式: ${base_fusion_mode}"
-        log_info "底盘命令保活: timeout=${base_cmd_timeout}s keepalive=${base_drive_keepalive_sec}s"
     fi
-    if [ "$localization_only" = false ] && [ -x "$CHECK_NAVIGATION_SCRIPT" ]; then
+    if [ "$localization_only" = false ] && [ -f "$CHECK_NAVIGATION_SCRIPT" ]; then
         log_info "若 RViz 点 2D Goal Pose 后没有 /plan 或车不动，可另开终端执行: ./robot.sh check navigation"
     fi
     echo
@@ -953,14 +945,6 @@ run_navigation() {
         use_rviz:=${use_rviz} \
         map_file:=${map_file} \
         base_port:=${base_port} \
-        base_baudrate:=115200 \
-        base_wheel_track_width:=${base_wheel_track_width} \
-        base_odom_angular_scale:=${base_odom_angular_scale} \
-        base_odom_angular_sign:=${base_odom_angular_sign} \
-        base_status_log_interval_sec:=${base_status_log_interval_sec} \
-        base_cmd_log_interval_sec:=${base_cmd_log_interval_sec} \
-        base_cmd_timeout:=${base_cmd_timeout} \
-        base_drive_keepalive_sec:=${base_drive_keepalive_sec} \
         lidar_tf_yaw:=${lidar_tf_yaw} \
         lidar_params_file:=${lidar_params} \
         nav2_bt_xml_file:=${nav2_bt_xml_file} \
@@ -1033,13 +1017,12 @@ run_sensor() {
 
 run_base() {
     local base_port="${BASE_PORT:-$DEFAULT_BASE_PORT}"
-    local base_wheel_track_width="${BASE_WHEEL_TRACK_WIDTH:-$DEFAULT_BASE_WHEEL_TRACK_WIDTH}"
-    local base_odom_angular_scale="${BASE_ODOM_ANGULAR_SCALE:-1.0}"
-    local base_odom_angular_sign="${BASE_ODOM_ANGULAR_SIGN:-1.0}"
-    local base_status_log_interval_sec="${BASE_STATUS_LOG_INTERVAL_SEC:-0.0}"
 
     while [ $# -gt 0 ]; do
         case "$1" in
+            --fake-base|--real-base)
+                shift
+                ;;
             --base-port|--port)
                 if [ $# -lt 2 ]; then
                     log_error "✗ --port 需要一个串口路径"
@@ -1062,15 +1045,14 @@ run_base() {
     ensure_workspace_built
     setup_ros_env
     print_header "底盘桥接启动"
-    base_port="$(resolve_base_port "$base_port")"
+    if [ "${ROBOT_BASE_MODE:-real}" = real ]; then
+        base_port="$(resolve_base_port "$base_port")"
+    fi
     log_info "底盘串口: ${base_port}"
-    ros2 launch stm32_robot_bridge stm32_bridge.launch.py \
-        port:=${base_port} \
-        baudrate:=115200 \
-        wheel_track_width:=${base_wheel_track_width} \
-        odom_angular_scale:=${base_odom_angular_scale} \
-        odom_angular_sign:=${base_odom_angular_sign} \
-        status_log_interval_sec:=${base_status_log_interval_sec}
+    ros2 launch robot_bringup base_only.launch.py \
+        effective_params_file:="${ROBOT_EFFECTIVE_PARAMS}" \
+        base_mode:="${ROBOT_BASE_MODE:-real}"
+
 }
 
 run_system() {
@@ -1081,10 +1063,6 @@ run_system() {
     local lidar_port=""
     local lidar_tf_yaw="${LIDAR_TF_YAW:-$DEFAULT_LIDAR_TF_YAW_RAD}"
     local base_port_explicit=false
-    local base_wheel_track_width="${BASE_WHEEL_TRACK_WIDTH:-$DEFAULT_BASE_WHEEL_TRACK_WIDTH}"
-    local base_odom_angular_scale="${BASE_ODOM_ANGULAR_SCALE:-1.0}"
-    local base_odom_angular_sign="${BASE_ODOM_ANGULAR_SIGN:-1.0}"
-    local base_status_log_interval_sec="${BASE_STATUS_LOG_INTERVAL_SEC:-0.0}"
     local rviz_config="$DEFAULT_SYSTEM_RVIZ"
 
     while [ $# -gt 0 ]; do
@@ -1152,9 +1130,9 @@ run_system() {
     export ROBOT_LIDAR_PORT_HINT="$lidar_port"
     base_port="$(resolve_base_port_avoiding_lidar "完整系统" "$base_port" "$lidar_port" "$base_port_explicit")"
     export ROBOT_BASE_PORT_HINT="$base_port"
-    if [ "$skip_lidar_check" = false ] && [ -x "$LIDAR_HEALTH_SCRIPT" ]; then
+    if [ "$skip_lidar_check" = false ] && [ -f "$LIDAR_HEALTH_SCRIPT" ]; then
         log_info "执行雷达数据健康检查..."
-        "$LIDAR_HEALTH_SCRIPT" "$lidar_params"
+        bash "$LIDAR_HEALTH_SCRIPT" "$lidar_params"
     fi
 
     stop_existing_sessions
@@ -1177,11 +1155,6 @@ run_system() {
         use_base:=true \
         use_rviz:=${use_rviz} \
         base_port:=${base_port} \
-        base_baudrate:=115200 \
-        base_wheel_track_width:=${base_wheel_track_width} \
-        base_odom_angular_scale:=${base_odom_angular_scale} \
-        base_odom_angular_sign:=${base_odom_angular_sign} \
-        base_status_log_interval_sec:=${base_status_log_interval_sec} \
         lidar_tf_yaw:=${lidar_tf_yaw} \
         lidar_params_file:=${lidar_params} \
         rviz_config:=${rviz_config}
@@ -1190,7 +1163,7 @@ run_system() {
 run_passthrough_script() {
     local script_path="$1"
     shift
-    exec "$script_path" "$@"
+    exec bash "$script_path" "$@"
 }
 
 run_check() {

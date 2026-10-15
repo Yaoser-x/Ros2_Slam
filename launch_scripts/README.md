@@ -57,6 +57,25 @@ cd /home/robot/ros2_ws
 但它们的成功不等价于 UART HIL、车辆或发布报告 PASS。
 证据的结构和门禁见 [`verification/README.md`](../verification/README.md)。
 
+### 底盘命令测试
+
+`bin/robot base-test --fake-base` 用于软件联调；具备硬件阶段许可后才运行
+`bin/robot base-test --real-base`。两者都通过唯一 `base_only.launch.py` 启动完整
+provider、控制仲裁、兼容门、状态估计和运动监督链，使用编译后的 `ROBOT_EFFECTIVE_PARAMS`。
+脚本等待当前 session 的 link/compatibility/supervision、Host rearm 和连续新 `/odom`，
+再发送低速测试请求。
+命令测试节点还会等待自身订阅者收到至少两帧新鲜、前进的有效里程计，
+再开始首阶段计时；DDS 发现期间只等待，超时失败退出，不发送非零请求。
+
+每个阶段至少需要两帧新里程计；移动阶段需对应方向的实际位移（至少 5mm）或累计转角
+（至少 1°），停车阶段末速度需低于 0.02m/s、0.05rad/s。缺失、静止、方向错误或未停车
+都会返回非零，`SUMMARY status=EXECUTED/STOPPED` 才能证明本次测试链执行。
+fake-base 的结果只证明仿真业务链，不计入 UART 或实车验收。
+
+`BASE_TEST_CMD_TIMEOUT`、`BASE_TEST_KEEPALIVE` 已不接受：设置它们会明确报错，
+安全时序必须来自 canonical compiled config。低速请求可用 `BASE_TEST_LINEAR`、
+`BASE_TEST_ANGULAR`、`BASE_TEST_DURATION` 控制；`BASE_TEST_READY_TIMEOUT` 只控制只读等待。
+
 ## 所有权
 
 - `bin/robot`：用户意图、配置编译和运行目录创建。
