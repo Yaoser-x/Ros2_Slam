@@ -47,6 +47,11 @@ class SerialTransportSupervisor:
         self._outbound: list[OutboundFrame] = []
         self._condition = threading.Condition()
         self._stop = False
+        self._closing = False
+        self._shutdown_frame: Optional[OutboundFrame] = None
+        self._shutdown_done = threading.Event()
+        self._shutdown_written = False
+        self._shutdown_deadline = 0.0
         self._thread: Optional[threading.Thread] = None
         self.device: Optional[Any] = None
         self.parser = FrameParser()
@@ -57,19 +62,39 @@ class SerialTransportSupervisor:
             self._thread = threading.Thread(target=self._run, name="stm32-serial", daemon=True)
             self._thread.start()
 
-    def close(self, timeout_sec: float = 0.5) -> None:
+    def close(
+        self, timeout_sec: float = 0.2, *, final_frame: Optional[OutboundFrame] = None
+    ) -> bool:
+        deadline = time.monotonic() + max(float(timeout_sec), 0.0)
+        with self._condition:
+            if not self._closing:
+                self._closing = True
+                self._shutdown_frame = final_frame
+                self._shutdown_deadline = deadline
+                # A shutdown disable replaces queued work, including stale critical
+                # commands. Only the I/O owner may write it to the serial device.
+                self._outbound = [final_frame] if final_frame is not None else []
+            if final_frame is None or self._thread is None:
+                self._stop = True
+            self._condition.notify_all()
+        if final_frame is not None and self._thread is not None:
+            self._shutdown_done.wait(timeout=max(deadline - time.monotonic(), 0.0))
         with self._condition:
             self._stop = True
             self._condition.notify_all()
         if self._thread is not None:
-            self._thread.join(timeout=max(float(timeout_sec), 0.0))
+            self._thread.join(timeout=max(deadline - time.monotonic(), 0.0))
         self._close_device()
+        return self._shutdown_written
 
     def submit(
         self, cmd: int, payload: bytes, *, critical: bool = False, coalesce: bool = False
     ) -> bool:
         frame = OutboundFrame(int(cmd) & 0xFF, bytes(payload), bool(critical), bool(coalesce))
         with self._condition:
+            if self._closing or self._stop:
+                self.stats.tx_queue_drops += 1
+                return False
             if coalesce:
                 self._outbound = [
                     item for item in self._outbound if item.cmd != frame.cmd or item.critical
@@ -115,6 +140,9 @@ class SerialTransportSupervisor:
     def _run(self) -> None:
         while not self._stop:
             if self.device is None:
+                if self._closing:
+                    self._shutdown_done.set()
+                    break
                 try:
                     self.device = open_serial_port(self.serial_module, self.port, self.baudrate)
                     set_modem_lines_low(self.device)
@@ -136,10 +164,30 @@ class SerialTransportSupervisor:
                     if self._outbound:
                         outbound = self._outbound.pop(0)
                 if outbound is not None:
+                    with self._condition:
+                        if self._closing and outbound is not self._shutdown_frame:
+                            continue
                     frame = build_frame(outbound.cmd, outbound.payload)
                     write_all(self.device, frame, self.stats)
                     self.stats.tx_frames += 1
                     self.stats.tx_bytes += len(frame)
+                    if outbound is self._shutdown_frame:
+                        self._shutdown_written = time.monotonic() <= self._shutdown_deadline
+                        self._shutdown_done.set()
+                        self._stop = True
+                        self._emit(
+                            TransportEvent(
+                                (
+                                    "shutdown_disable_written"
+                                    if self._shutdown_written
+                                    else "shutdown_write_timeout"
+                                ),
+                                outbound.cmd,
+                                outbound.payload,
+                                time.monotonic(),
+                            )
+                        )
+                        break
                 device = self.device
                 if device is None:
                     continue
@@ -163,6 +211,9 @@ class SerialTransportSupervisor:
                     TransportEvent("disconnected", detail=str(exc), received_at=time.monotonic())
                 )
                 self._close_device()
+                if self._closing:
+                    self._shutdown_done.set()
+                    break
 
     def _close_device(self) -> None:
         if self.device is not None:

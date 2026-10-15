@@ -34,6 +34,8 @@ def open_serial_port(serial_module, resolved_port: str, baudrate: int):
     device.write_timeout = 0.2
     device.rtscts = False
     device.dsrdtr = False
+    if hasattr(device, "exclusive"):
+        device.exclusive = True
     set_modem_lines_low(device)
     device.open()
     set_modem_lines_low(device)

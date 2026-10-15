@@ -76,7 +76,7 @@ from stm32_robot_bridge.protocol_v3 import (
     imu_identity_is_new,
     sequence_is_forward,
 )
-from stm32_robot_bridge.transport_supervisor import SerialTransportSupervisor
+from stm32_robot_bridge.transport_supervisor import OutboundFrame, SerialTransportSupervisor
 
 
 def _qos_command(deadline_sec: float, lifespan_sec: float) -> QoSProfile:
@@ -690,9 +690,17 @@ class STM32BridgeV3(Node):
     def shutdown(self) -> None:
         try:
             # rclpy's signal handler may already have invalidated the context.
-            self._release("", publish_state=False)
+            self._release("", force_fresh=True, publish_state=False)
         finally:
-            self.transport.close()
+            payload = self.command_stream.last_payload
+            final_frame = (
+                OutboundFrame(CMD_SET_VELOCITY, payload, critical=True)
+                if payload is not None and not self.command_stream.enabled
+                else None
+            )
+            self.shutdown_disable_written = self.transport.close(
+                timeout_sec=0.2, final_frame=final_frame
+            )
 
 
 def main(args=None) -> None:

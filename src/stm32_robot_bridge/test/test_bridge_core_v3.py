@@ -30,7 +30,7 @@ from stm32_robot_bridge.protocol_v3 import (
     sequence_is_forward,
     StatusPayload,
 )
-from stm32_robot_bridge.transport_supervisor import SerialTransportSupervisor, TransportEvent
+from stm32_robot_bridge.transport_supervisor import OutboundFrame, SerialTransportSupervisor, TransportEvent
 
 
 def status(sequence=1, session=7, received=1, applied=1, flags=0):
@@ -507,6 +507,7 @@ def bridge_timer_adapter():
         ACK_RECEIVED=ACK_RECEIVED,
         ACK_APPLIED=ACK_APPLIED,
         ACK_REJECTED=ACK_REJECTED,
+        OutboundFrame=OutboundFrame,
         REARM_ACK_TIMEOUT=REARM_ACK_TIMEOUT,
     )
     node = classes.STM32BridgeV3.__new__(classes.STM32BridgeV3)
