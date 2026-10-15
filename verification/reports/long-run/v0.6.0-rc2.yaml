@@ -2,7 +2,7 @@ schema_version: 1
 release: v0.6.0-rc2
 result: NOT_RUN
 upper_commit: null
-firmware_commit: bc472cc874e930aaed6eb8e7de73b41a2563dd85
+firmware_commit: 158254bd5c21f74a64f1d7c8609475a4c7caa1c7
 hardware_revision: null
 config_sha256: null
 artifact_sha256: null

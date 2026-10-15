@@ -4,13 +4,13 @@ wire_protocol: 3
 upper_baseline_commit: 2f16c8b9127a9534bade4fe9f3abb33643b4bd0b
 upper_release_candidate_commit: null
 upper_tested_commit: null
-firmware_candidate_commit: bc472cc874e930aaed6eb8e7de73b41a2563dd85
-firmware_candidate_release: v1.0.0-rc1
+firmware_candidate_commit: 158254bd5c21f74a64f1d7c8609475a4c7caa1c7
+firmware_candidate_release: null
 firmware_tested_commit: null
 firmware_compatible_commit: null
-expected_hardware_revision: null
+expected_hardware_revision: 0x20000
 expected_enabled_mask: 0x06
 required_capabilities: 0x1f
-expected_parameter_crc32: null
+expected_parameter_crc32: 0x0D663E2A
 status: implementation_ready_hil_pending
 release_compatible: false

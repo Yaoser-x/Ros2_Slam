@@ -5,7 +5,7 @@ evidence_type: software
 gate: pty_report
 result: NOT_RUN
 upper_commit: null
-firmware_commit: bc472cc874e930aaed6eb8e7de73b41a2563dd85
+firmware_commit: 158254bd5c21f74a64f1d7c8609475a4c7caa1c7
 protocol_version: 3
 scenarios: []
 metrics: {}

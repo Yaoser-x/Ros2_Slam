@@ -6,7 +6,7 @@ required_capability_mask: 31
 golden_vector_sha256: 8406a0f8d0b450d1fc1af27ef6b2b5c17742285c732eeb8705da4bd2855e2a0e
 result: NOT_RUN
 upper_commit: null
-firmware_commit: bc472cc874e930aaed6eb8e7de73b41a2563dd85
+firmware_commit: 158254bd5c21f74a64f1d7c8609475a4c7caa1c7
 hardware_revision: null
 config_sha256: null
 artifact_sha256: null
