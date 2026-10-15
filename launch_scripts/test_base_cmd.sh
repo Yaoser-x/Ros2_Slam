@@ -126,7 +126,7 @@ log_info "Keep the real robot lifted or in a clear open area. Ctrl-C stops the t
 if [ "$BASE_TEST_STOP_FIRST" = "true" ] && [ -f "${SCRIPT_DIR}/stop_all.sh" ]; then
     bash "${SCRIPT_DIR}/stop_all.sh" >/dev/null 2>&1 || true
 fi
-setsid ros2 launch robot_bringup base_only.launch.py \
+setsid env --default-signal=INT,TERM ros2 launch robot_bringup base_only.launch.py \
     base_mode:="${BASE_MODE}" base_port:="${BASE_PORT}" \
     effective_params_file:="${ROBOT_EFFECTIVE_PARAMS}" >"$LAUNCH_LOG" 2>&1 &
 LAUNCH_PID="$!"

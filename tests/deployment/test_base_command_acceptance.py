@@ -443,6 +443,7 @@ def test_failed_readiness_cleans_only_its_private_launch_group(tmp_path):
 from pathlib import Path
 if sys.argv[1] != "launch":
     raise SystemExit(0)
+assert signal.getsignal(signal.SIGINT) != signal.SIG_IGN, "launcher inherited ignored SIGINT"
 signal.signal(signal.SIGINT, signal.SIG_IGN)
 child_ready = Path(os.environ["OWN_PIDS"] + ".child")
 child = subprocess.Popen([sys.executable, "-c",
