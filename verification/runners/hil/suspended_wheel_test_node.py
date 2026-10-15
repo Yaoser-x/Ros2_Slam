@@ -163,7 +163,9 @@ def main(argv=None):
     try:
         until = time.monotonic() + 20.0
         while time.monotonic() < until and (gate.reason(time.monotonic()) or "wheel" not in latest):
-            spin_command(0.0, 0.0, 0.05, require_ready=False)
+            # Rearm requires source silence. Even zero Twist is a fresh input;
+            # observe readiness before admitting any test command.
+            rclpy.spin_once(node, timeout_sec=0.05)
         reason = gate.reason(time.monotonic())
         if reason or "wheel" not in latest:
             raise RuntimeError(reason or "no raw wheel observations")
