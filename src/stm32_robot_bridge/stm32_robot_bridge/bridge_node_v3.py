@@ -701,6 +701,14 @@ class STM32BridgeV3(Node):
             self.shutdown_disable_written = self.transport.close(
                 timeout_sec=0.2, final_frame=final_frame
             )
+            # The ROS context can already be invalid; retain host write evidence
+            # in the process log without publishing or claiming a firmware ACK.
+            print(
+                f"SERIAL_SHUTDOWN session={self.command_stream.session_id} "
+                f"sequence={self.command_stream.sequence} "
+                f"disable_written={self.shutdown_disable_written} applied=UNCONFIRMED",
+                flush=True,
+            )
 
 
 def main(args=None) -> None:

@@ -899,7 +899,7 @@ def test_ack_age_for_real_sequence_zero_remains_valid_and_duplicate_ack_does_not
     assert 59 <= published_adapter_link(node).command_ack_age_ms <= 60
 
 
-def test_shutdown_releases_and_closes_transport_without_using_invalid_ros_context():
+def test_shutdown_releases_and_closes_transport_without_using_invalid_ros_context(capsys):
     node, clock = ready_timer_adapter()
     adapter_host_command(node, clock, 1)
     node.control_tick()
@@ -911,6 +911,9 @@ def test_shutdown_releases_and_closes_transport_without_using_invalid_ros_contex
     node._publish_link_state = invalid_context
     node.get_logger = invalid_context
     node.shutdown()
+    trace = capsys.readouterr().out
+    assert "SERIAL_SHUTDOWN session=" in trace
+    assert "disable_written=False applied=UNCONFIRMED" in trace
     assert not node.command_stream.enabled
     assert node.transport._stop
     final = node.transport._outbound[0]
