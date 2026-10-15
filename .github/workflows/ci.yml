@@ -72,41 +72,16 @@ jobs:
           cmake --build firmware-contract/build-host --parallel 2
           ctest --test-dir firmware-contract/build-host --output-on-failure
 
-      - name: colcon build
+      - name: Linux software evidence with coverage
         run: |
           . /opt/ros/humble/setup.sh
-          colcon build --base-paths src --symlink-install --packages-skip ydlidar_ros2_driver
+          python3 scripts/verify/run_software_evidence.py \
+            --firmware-root firmware-contract \
+            --output-dir build/software-evidence \
+            --with-coverage
 
-      - name: colcon test
+      - name: Module coverage thresholds
         run: |
-          . /opt/ros/humble/setup.sh
-          . install/setup.sh
-          colcon test --base-paths src \
-            --packages-skip ydlidar_ros2_driver \
-            --return-code-on-test-failure
-
-      - name: colcon test-result
-        if: always()
-        run: |
-          . /opt/ros/humble/setup.sh
-          colcon test-result --verbose
-
-      - name: pytest with coverage
-        env:
-          FIRMWARE_CONTRACT_DIR: ${{ github.workspace }}/firmware-contract
-        run: |
-          . /opt/ros/humble/setup.sh
-          . install/setup.sh
-          python3 -m pytest tests/ src/ \
-            --cov=src/stm32_robot_bridge \
-            --cov=src/robot_control \
-            --cov=src/robot_sensing \
-            --cov=src/robot_state_estimation \
-            --cov=src/robot_supervision \
-            --cov=src/robot_verification \
-            --cov-report=term \
-            --cov-report=xml \
-            -v
           python3 -m coverage json -o coverage.json
           python3 scripts/verify/check_coverage.py coverage.json
 

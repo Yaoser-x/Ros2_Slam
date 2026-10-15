@@ -1,0 +1,15 @@
+schema_version: 1
+release: v0.6.0-rc2
+platform_api_version: 5
+protocol_version: 3
+evidence_type: software
+gate: ros_ci
+result: NOT_RUN
+upper_commit: null
+firmware_commit: null
+tested_pair: null
+source_pair_after: null
+checks: {}
+metrics: {}
+failures: []
+blocker: Actual Linux ROS build, tests and source-pair evidence have not been recorded.

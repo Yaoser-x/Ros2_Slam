@@ -64,6 +64,32 @@ capability、硬件 revision、参数 CRC、轮布局和新鲜观测。真实平
 正式 odom 和导航均 fail-closed；Fake Base 通过显式 `simulated` 身份进入 simulation
 状态。
 
-当前候选固件为 `bc472cc874e930aaed6eb8e7de73b41a2563dd85`，但 tested commit、
-参数 CRC、硬件 revision、UART HIL、标定和实车报告尚未锁定，
-`release_compatible` 仍为 `false`。
+兼容配置中的候选固件仍为 `bc472cc874e930aaed6eb8e7de73b41a2563dd85`，tested commit
+与正式配对尚未锁定。2026-10-15 的开发固件串口实测已读到 hardware revision
+`0x00020000` 和参数 CRC `0x0D663E2A`；这些观测不自动修改正式兼容配置。
+当前开发构建的 HELLO 身份仍为零，BUILD_IDENTITY capability 缺失，兼容门应保持关闭。
+`release_compatible` 仍为 `false`，标定和落地车辆验收尚未完成。
+
+真实 UART 阶段补充了两个此前源码／fake-base 回归未覆盖的问题：完整控制帧被 DMA
+覆盖保护误判丢弃，以及 Bridge 安装后缺少 Python 路径环境 hook。下位机接收契约见
+`lower/docs/repair-business-contracts.md`；上位机使用 `ament_python_install_package`
+安装模块，回归须在清除源码 PYTHONPATH 后重新构建并 source 安装产物，验证实际导入。
+Bridge 退出时不再访问可能已失效的 ROS 发布／日志上下文，释放过程抛出异常也必须关闭串口。
+架空低速、10.5 秒同值命令续租、GET_INFO 幂等和串口停止发送后停车已有开发级证据；
+它们不替代正式 ROS 运动许可、落地制动距离、SLAM/Nav2 和长稳验收。
+
+## 后续实施顺序
+
+| 阶段 | 当前边界与进入条件 |
+| --- | --- |
+| 1：导航可靠性 | 已实现本轮限速、Action、会话证据、许可时效、配置传播和 base-only 修复；ROS executor/运行图结果以实际报告为准。仍需锁定干净版本身份、实测参数 CRC、接线、真实 UART、标定、车辆及 SLAM/Nav2 验收，才能关闭本阶段。 |
+| 2：平台化 | 保留现有业务包和上下位机独立仓库，按经过验证的需求增加 provider、能力和配置边界。每个新平台需要独立硬件身份、标定及 UART/车辆证据；Fake 不替代实机资格。 |
+| 3：教学入口 | 在已验收平台上整理 fake/base-only 场景、状态观察和实拍操作。先交付一个可复现单元，再扩展课程；实机步骤保留兼容门、操作员就绪和安全准备要求。 |
+
+Upper v4 若增加请求关联的操作结果，应另行定义请求身份、ACK/结果语义和跨版本
+兼容，并通过双端黄金向量、主机测试和真实 UART 验证。当前修复仍使用 v3，未将
+无关联 STATUS 包装成请求执行回执。
+
+当前明确拒绝非空 namespace。开放多机器人前，需要统一参数 selector、相对话题、
+Action 与 TF 的隔离规则，并在两个独立 fake 图及对应实机上验证无串线。
+第二、三阶段尚未实施完成；本轮软件回归不能替代上述物理门禁。

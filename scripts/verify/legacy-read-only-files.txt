@@ -3,6 +3,7 @@ experiments/legacy/auto_mapping_driver.py
 experiments/legacy/frontier_explorer.py
 launch_scripts/README.md
 launch_scripts/base_cmd_test_node.py
+launch_scripts/base_test_readiness.py
 launch_scripts/chassis_protocol_probe.py
 launch_scripts/check_chassis.sh
 launch_scripts/check_lidar_health.sh

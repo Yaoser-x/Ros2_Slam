@@ -18,6 +18,18 @@ import yaml
 
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 SHA64 = re.compile(r"^[0-9a-f]{64}$")
+COMPUTED_FIELDS = frozenset(
+    {
+        "schema_version",
+        "release",
+        "result",
+        "metrics",
+        "failures",
+        "event_sha256",
+        "serial_trace_sha256",
+        "wheel_stop_acceptance",
+    }
+)
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -45,6 +57,8 @@ def evaluate(
     contract: dict[str, Any], metadata: dict[str, Any], events: dict[str, dict[str, int]]
 ) -> tuple[list[str], dict[str, Any]]:
     failures: list[str] = []
+    for key in sorted(COMPUTED_FIELDS & metadata.keys()):
+        failures.append(f"metadata may not override computed field {key}")
     required_metadata = (
         "upper_commit",
         "firmware_commit",
@@ -57,20 +71,34 @@ def evaluate(
     for key in required_metadata:
         if metadata.get(key) in (None, ""):
             failures.append(f"metadata missing {key}")
-    if not SHA40.fullmatch(str(metadata.get("upper_commit", ""))):
+    if (
+        not isinstance(metadata.get("upper_commit"), str)
+        or not SHA40.fullmatch(metadata.get("upper_commit", ""))
+        or metadata.get("upper_commit") == "0" * 40
+    ):
         failures.append("upper_commit is not a 40-character SHA")
+    if (
+        not isinstance(metadata.get("firmware_commit"), str)
+        or not SHA40.fullmatch(metadata.get("firmware_commit", ""))
+        or metadata.get("firmware_commit") == "0" * 40
+    ):
+        failures.append("firmware_commit is not a 40-character SHA")
     if metadata.get("firmware_commit") != contract["firmware_candidate_commit"]:
         failures.append("firmware_commit differs from frozen candidate")
     if not SHA64.fullmatch(str(metadata.get("config_sha256", ""))):
         failures.append("config_sha256 is not a SHA-256")
     parameter_crc = metadata.get("parameter_crc32")
-    if isinstance(parameter_crc, bool) or not isinstance(parameter_crc, int) or parameter_crc == 0:
+    if (
+        isinstance(parameter_crc, bool)
+        or not isinstance(parameter_crc, int)
+        or not 0 < parameter_crc <= 0xFFFFFFFF
+    ):
         failures.append("parameter_crc32 must be a measured non-zero integer")
     hardware_revision = metadata.get("hardware_revision")
     if (
         isinstance(hardware_revision, bool)
         or not isinstance(hardware_revision, int)
-        or hardware_revision <= 0
+        or not 0 < hardware_revision <= 0xFFFFFFFF
     ):
         failures.append("hardware_revision must be a positive integer")
     artifact_hashes = metadata.get("artifact_sha256")
@@ -112,7 +140,34 @@ def evaluate(
             metrics["timing_ms"][scenario_id] = elapsed
             if elapsed > float(scenario["max_motor_target_zero_ms"]):
                 failures.append(f"{scenario_id} motor target zero took {elapsed:.3f} ms")
+        if "wheel_speed_below_threshold_at" in scenario["required_events"]:
+            # Event names alone cannot prove a physical speed threshold.  The
+            # current v3 contract has no recorded threshold/measurement rule.
+            metrics.setdefault("wheel_stop_acceptance", {})[scenario_id] = "NOT_EVALUATED"
+            failures.append(
+                f"{scenario_id} wheel-stop threshold and measured speed acceptance are not defined"
+            )
     return failures, metrics
+
+
+def build_report(contract, metadata, events, event_bytes, serial_trace_bytes):
+    failures, metrics = evaluate(contract, metadata, events)
+    if not serial_trace_bytes:
+        failures.append("serial trace is missing or empty")
+    # Computed fields are written last even when hostile metadata is rejected.
+    return {
+        **{key: value for key, value in metadata.items() if key not in COMPUTED_FIELDS},
+        "started_at": metadata.get("started_at") or datetime.now(timezone.utc).isoformat(),
+        "schema_version": 1,
+        "release": contract["release"],
+        "event_sha256": hashlib.sha256(event_bytes).hexdigest(),
+        "serial_trace_sha256": (
+            hashlib.sha256(serial_trace_bytes).hexdigest() if serial_trace_bytes else None
+        ),
+        "metrics": metrics,
+        "failures": failures,
+        "result": "FAIL" if failures else "PASS",
+    }
 
 
 def main() -> int:
@@ -125,24 +180,13 @@ def main() -> int:
     args = parser.parse_args()
 
     contract, metadata = _load_yaml(args.contract), _load_yaml(args.metadata)
-    failures, metrics = evaluate(contract, metadata, _load_events(args.events))
-    if not args.serial_trace.is_file() or args.serial_trace.stat().st_size == 0:
-        failures.append("serial trace is missing or empty")
-    report = {
-        "schema_version": 1,
-        "release": contract["release"],
-        "result": "FAIL" if failures else "PASS",
-        **metadata,
-        "started_at": metadata.get("started_at") or datetime.now(timezone.utc).isoformat(),
-        "event_sha256": hashlib.sha256(args.events.read_bytes()).hexdigest(),
-        "serial_trace_sha256": (
-            hashlib.sha256(args.serial_trace.read_bytes()).hexdigest()
-            if args.serial_trace.is_file()
-            else None
-        ),
-        "metrics": metrics,
-        "failures": failures,
-    }
+    report = build_report(
+        contract,
+        metadata,
+        _load_events(args.events),
+        args.events.read_bytes(),
+        args.serial_trace.read_bytes() if args.serial_trace.is_file() else b"",
+    )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{args.output.name}.", dir=args.output.parent
@@ -164,7 +208,7 @@ def main() -> int:
         except FileNotFoundError:
             pass
         raise
-    return 1 if failures else 0
+    return 1 if report["failures"] else 0
 
 
 if __name__ == "__main__":

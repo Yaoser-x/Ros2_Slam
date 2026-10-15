@@ -1,9 +1,16 @@
 schema_version: 1
 release: v0.6.0-rc2
+platform_api_version: 5
+evidence_type: software
+gate: pty_report
 result: NOT_RUN
 upper_commit: null
 firmware_commit: bc472cc874e930aaed6eb8e7de73b41a2563dd85
 protocol_version: 3
 scenarios: []
 metrics: {}
+tested_pair: null
+source_pair_after: null
+checks: {}
+failures: []
 evidence: tests/integration/test_pty_fake_stm32.py

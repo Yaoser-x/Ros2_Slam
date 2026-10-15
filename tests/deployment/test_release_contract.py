@@ -2,6 +2,8 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 import importlib.util
 import hashlib
+import os
+import subprocess
 
 import yaml
 
@@ -55,7 +57,14 @@ def test_unified_verify_entrypoints_exist_and_use_python_module_pytest() -> None
     for name in ("verify_upper.sh", "verify_protocol.sh", "verify_runtime.sh"):
         path = ROOT / "scripts" / "verify" / name
         assert path.is_file(), name
-        assert path.stat().st_mode & 0o111, name
+        if os.name == "nt":
+            mode = subprocess.check_output(
+                ["git", "-C", str(ROOT), "ls-files", "-s", str(path.relative_to(ROOT))],
+                text=True,
+            ).split()[0]
+            assert mode == "100755", name
+        else:
+            assert path.stat().st_mode & 0o111, name
 
     upper_script = (ROOT / "scripts" / "verify" / "verify_upper.sh").read_text(encoding="utf-8")
     assert "python3 -m pytest" in upper_script
@@ -78,8 +87,10 @@ def test_ci_enforces_quality_and_module_coverage_thresholds() -> None:
     assert "shellcheck" in ci
     assert "coverage json -o coverage.json" in ci
     assert "scripts/verify/check_coverage.py" in ci
-    assert "--cov=src/robot_supervision" in ci
-    assert "--cov=src/robot_verification" in ci
+    assert "run_software_evidence.py" in ci and "--with-coverage" in ci
+    runner = (ROOT / "scripts/verify/run_software_evidence.py").read_text(encoding="utf-8")
+    assert "--cov=src/robot_supervision" in runner
+    assert "--cov=src/robot_verification" in runner
 
 
 def test_all_owned_ros_packages_are_versioned_v060() -> None:
@@ -139,6 +150,7 @@ def test_release_result_validation_rejects_boolean_identity_and_bad_artifact_has
         "parameter_crc32": True,
         "calibration_version": "v1",
         "metrics": {"sample_count": 1},
+        "failures": [],
     }
 
     failures = module._validate_result("audit", report, "v0.6.0-rc2")

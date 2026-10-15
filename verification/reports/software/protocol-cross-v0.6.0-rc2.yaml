@@ -1,0 +1,15 @@
+schema_version: 1
+release: v0.6.0-rc2
+platform_api_version: 5
+protocol_version: 3
+evidence_type: software
+gate: protocol_cross_test
+result: NOT_RUN
+upper_commit: null
+firmware_commit: null
+tested_pair: null
+source_pair_after: null
+checks: {}
+metrics: {}
+failures: []
+blocker: Production lower C and upper Python combined evidence has not been recorded for a release pair.

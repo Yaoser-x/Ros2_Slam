@@ -5,8 +5,8 @@ upper_architecture_baseline_commit: 2f16c8b9127a9534bade4fe9f3abb33643b4bd0b
 firmware_candidate_commit: bc472cc874e930aaed6eb8e7de73b41a2563dd85
 firmware_candidate_tag: v1.0.0-rc1
 software_gates:
-  ros_ci: required
-  protocol_cross_test: required
+  ros_ci: verification/reports/software/ros-ci-v0.6.0-rc2.yaml
+  protocol_cross_test: verification/reports/software/protocol-cross-v0.6.0-rc2.yaml
   pty_report: verification/reports/pty/v0.6.0-rc2.yaml
 hardware_gates:
   protocol_report: verification/reports/protocol/v0.6.0-rc2.yaml
