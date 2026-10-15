@@ -9,7 +9,7 @@ from robot_config.runtime_options import runtime_overrides
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location(
-    "suspended_evidence_test", ROOT / "launch_scripts/suspended_wheel_evidence.py"
+    "suspended_evidence_test", ROOT / "verification/runners/hil/suspended_wheel_evidence.py"
 )
 evidence = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(evidence)

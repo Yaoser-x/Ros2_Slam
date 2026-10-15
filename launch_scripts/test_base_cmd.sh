@@ -147,7 +147,7 @@ if ! kill -0 "$LAUNCH_PID" 2>/dev/null; then
     exit 1
 fi
 if [ "$SUSPENDED_WHEEL" = "true" ]; then
-    if ! python3 "${SCRIPT_DIR}/suspended_wheel_test_node.py" \
+    if ! python3 "${SCRIPT_DIR}/../verification/runners/hil/suspended_wheel_test_node.py" \
             --report "${BASE_TEST_LOG_DIR}/suspended_${STAMP}.json" >"$CMD_LOG" 2>&1; then
         log_error "suspended-wheel execution was not proven; see $CMD_LOG and $LAUNCH_LOG"
         exit 1

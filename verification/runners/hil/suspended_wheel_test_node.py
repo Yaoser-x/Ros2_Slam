@@ -6,8 +6,11 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import sys
 import time
 
+# Reuse the established base-only readiness and phase evidence helpers.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "launch_scripts"))
 from base_cmd_test_node import PhaseStats
 from base_test_readiness import BaseReadiness, freshness_limit, runtime_topics
 from suspended_wheel_evidence import (
