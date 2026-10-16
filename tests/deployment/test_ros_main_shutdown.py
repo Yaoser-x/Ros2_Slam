@@ -44,6 +44,7 @@ def entrypoint(package, module, constructor, *, context_ok, failure):
         ("rclpy_implementation", "_rclpy")
     ]
     events = []
+    init_options, signal_handlers = [], []
     node = NS(
         context=NS(ok=lambda: context_ok),
         destroy_node=lambda: events.append("destroy"),
@@ -56,7 +57,7 @@ def entrypoint(package, module, constructor, *, context_ok, failure):
 
     namespace = {
         "rclpy": NS(
-            init=lambda *args, **kwargs: events.append("init"),
+            init=lambda *args, **kwargs: (events.append("init"), init_options.append(kwargs)),
             spin=spin,
             # An unrelated default context must not decide this node's validity.
             ok=lambda: not context_ok,
@@ -65,9 +66,14 @@ def entrypoint(package, module, constructor, *, context_ok, failure):
         ),
         "_rclpy": NS(RCLError=RCLError),
         "ExternalShutdownException": ExternalShutdownException,
+        "SignalHandlerOptions": NS(NO="no-native-signal-handler"),
+        "signal": NS(SIGINT=2, SIGTERM=15, default_int_handler="python-interrupt",
+                     signal=lambda *args: signal_handlers.append(args)),
         constructor: lambda: node,
     }
     exec(compile(ast.Module(body=[main], type_ignores=[]), str(path), "exec"), namespace)
+    namespace["main"].init_options = init_options
+    namespace["main"].signal_handlers = signal_handlers
     return namespace["main"], events
 
 
@@ -101,25 +107,16 @@ def test_shutdown_does_not_swallow_unrelated_runtime_error(package, module, cons
     assert events == ["init", "spin", "destroy", "shutdown"]
 
 
-@pytest.mark.parametrize("context_ok", [False, True], ids=["shutdown", "live-context"])
 @pytest.mark.parametrize("package,module,constructor", [
     ("robot_supervision", "motion_supervisor_node", "MotionSupervisorNode"),
     ("robot_control", "cmd_vel_mux", "CmdVelMuxNode"),
 ])
-def test_message_conversion_shutdown_race_requires_invalid_context(
-    package, module, constructor, context_ok
-):
-    error = RuntimeError(
-        "Unable to convert call argument to Python object (compile in debug mode for details)"
-    )
+def test_python_signal_interrupt_cleans_up_before_context_is_shutdown(package, module, constructor):
     main, events = entrypoint(
         package, module, constructor,
-        context_ok=context_ok, failure=error,
+        context_ok=True, failure=KeyboardInterrupt(),
     )
-    if context_ok:
-        with pytest.raises(RuntimeError) as raised:
-            main()
-        assert raised.value is error
-    else:
-        main()
+    main()
+    assert main.init_options[0]["signal_handler_options"] == "no-native-signal-handler"
+    assert main.signal_handlers == [(2, "python-interrupt"), (15, "python-interrupt")]
     assert events == ["init", "spin", "destroy", "shutdown"]

@@ -173,6 +173,7 @@ sys.modules["rclpy.duration"].Duration = MagicMock()
 sys.modules["rclpy.qos"] = MagicMock()
 sys.modules["rclpy.qos"].QoSProfile = MagicMock()
 sys.modules["rclpy.qos_event"] = MagicMock()
+sys.modules["rclpy.signals"] = MagicMock()
 
 # ---------------------------------------------------------------------------
 # 导入被测试模块

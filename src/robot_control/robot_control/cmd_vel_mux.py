@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 import secrets
 import math
+import signal
 import time
 from typing import Dict, Optional
 
 import rclpy
+from rclpy.signals import SignalHandlerOptions
 from rclpy.impl.implementation_singleton import rclpy_implementation as _rclpy
 from geometry_msgs.msg import Twist
 from rclpy.clock import Clock, ClockType
@@ -547,7 +549,10 @@ class CmdVelMuxNode(Node):
 
 
 def main() -> None:
-    rclpy.init()
+    # Unwind spin before context teardown so DDS message conversion stays valid.
+    rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
     node = CmdVelMuxNode()
     try:
         rclpy.spin(node)
@@ -555,11 +560,6 @@ def main() -> None:
         pass
     except _rclpy.RCLError:
         if node.context.ok():
-            raise
-    except RuntimeError as exc:
-        if node.context.ok() or str(exc) != (
-            "Unable to convert call argument to Python object (compile in debug mode for details)"
-        ):
             raise
     finally:
         node.destroy_node()

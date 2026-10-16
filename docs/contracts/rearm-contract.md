@@ -12,6 +12,11 @@ wire ready 时按 `rearm_disable_retry_sec` 重发，默认 50 ms；沿用同一
 window，也不产生 enable；wire ready 后仍等待新的操作者输入。Bridge 对同一 wire
 disable sequence 的重发不得延长首次 ACK deadline。
 
+Bridge、mux 和运动监督的进程退出由 Python SIGINT/SIGTERM 中断执行循环，再按顺序
+清理节点及 ROS 上下文，避免 Humble 在消息转换期间异步销毁上下文。Bridge 在节点
+销毁前完成有界串口关闭；主机写入完成与固件 APPLIED 证据仍分别记录。其他运行期
+RuntimeError 继续抛出，不通过异常文本判断来忽略业务错误。
+
 ## 导航取消与许可时效
 
 Action 等待使用原生 rclpy Future，steady timer 驱动状态检查和取消，不要求 asyncio

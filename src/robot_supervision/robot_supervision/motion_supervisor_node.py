@@ -2,10 +2,12 @@
 """ROS adapter for motion supervision decisions."""
 
 import math
+import signal
 import time
 from typing import Any, Optional
 
 import rclpy
+from rclpy.signals import SignalHandlerOptions
 from rclpy.impl.implementation_singleton import rclpy_implementation as _rclpy
 from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
@@ -271,7 +273,10 @@ class MotionSupervisorNode(Node):
 
 
 def main(args=None) -> None:
-    rclpy.init(args=args)
+    # Unwind spin before context teardown so DDS message conversion stays valid.
+    rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
     node = MotionSupervisorNode()
     try:
         rclpy.spin(node)
@@ -279,13 +284,6 @@ def main(args=None) -> None:
         pass
     except _rclpy.RCLError:
         if node.context.ok():
-            raise
-    except RuntimeError as exc:
-        # Humble may race signal-driven context teardown while converting a
-        # taken subscription message. Other runtime failures remain visible.
-        if node.context.ok() or str(exc) != (
-            "Unable to convert call argument to Python object (compile in debug mode for details)"
-        ):
             raise
     finally:
         node.destroy_node()

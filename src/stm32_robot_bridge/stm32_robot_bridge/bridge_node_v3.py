@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import secrets
+import signal
 import time
 from typing import Optional, Tuple
 
 import rclpy
+from rclpy.signals import SignalHandlerOptions
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from rclpy.clock import Clock, ClockType
 from rclpy.duration import Duration
@@ -763,7 +765,10 @@ class STM32BridgeV3(Node):
 
 
 def main(args=None) -> None:
-    rclpy.init(args=args)
+    # Keep the context valid until the executor unwinds and serial stop is sent.
+    rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
     node = STM32BridgeV3()
     # All ROS callbacks use the mutually exclusive default group, and serial
     # I/O already has its own owner. Keep state-machine callbacks on one thread.
