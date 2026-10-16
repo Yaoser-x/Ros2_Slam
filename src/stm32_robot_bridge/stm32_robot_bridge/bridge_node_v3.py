@@ -319,8 +319,7 @@ class STM32BridgeV3(Node):
     def _on_command_message_lost(self, event) -> None:
         self.command_queue_drop_count += max(int(event.total_count_change), 0)
 
-    def control_tick(self) -> None:
-        began = time.monotonic()
+    def _drain_commands(self) -> None:
         for _ in range(32):
             overflow, command = self.command_inbox.take()
             if overflow:
@@ -331,6 +330,10 @@ class STM32BridgeV3(Node):
             if command is None:
                 break
             self._apply_chassis_command(command)
+
+    def control_tick(self) -> None:
+        began = time.monotonic()
+        self._drain_commands()
         # Publishing a batch of sensor messages must not monopolize the ROS
         # callback group and starve fresh Host commands. Never dequeue work
         # beyond this tick's budget; remaining frames retain their order.
@@ -350,6 +353,9 @@ class STM32BridgeV3(Node):
                 self._handle_frame(event.cmd, event.payload, event.received_at)
             if time.monotonic() - began >= 0.004:
                 break
+        # Receipt can progress while telemetry runs. Consume that handoff before
+        # evaluating the lease, retaining each command's original receipt time.
+        self._drain_commands()
         now = time.monotonic()
         before = self.core.snapshot
         release, reason = self.core.tick(now)

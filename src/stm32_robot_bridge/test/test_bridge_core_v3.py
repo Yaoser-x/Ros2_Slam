@@ -739,6 +739,38 @@ def ready_timer_adapter():
     return node, clock
 
 
+@pytest.mark.parametrize("arrival", ["fresh", "stale", "none", "revoked"])
+def test_receipts_during_telemetry_are_consumed_before_lease_decision(arrival):
+    node, clock = ready_timer_adapter()
+    clock.value = 1.02
+    adapter_host_command(node, clock, 1, target=0.05)
+    node.control_tick()
+    sent = node.core.snapshot.wire_sent_sequence
+    clock.value = 1.14
+    queue_adapter_status(node, clock, status(sequence=3, received=sent, applied=sent))
+
+    def slow_telemetry(*_args):
+        if arrival != "none":
+            received_at = 0.99 if arrival == "stale" else 1.16
+            node.command_inbox.put(ReceivedCommand(
+                0.05, 0.0, True, 3, 100, 2, received_at, received_at, received_at
+            ))
+        clock.value = 1.20
+        if arrival == "revoked":
+            node.core.require_rearm(16)
+            node._release("firmware ESTOP/fault-stop")
+
+    node._publish_status = slow_telemetry
+    node.control_tick()
+    if arrival == "fresh":
+        assert node.core.can_drive and node.command_stream.enabled
+        assert node.core.snapshot.command_sequence == 2
+        assert node.core.snapshot.last_command_at == 1.16
+    else:
+        assert node.core.snapshot.rearm_required
+        assert not node.command_stream.enabled
+
+
 def test_changing_targets_and_fresh_status_without_ack_cannot_extend_active_budget():
     node, clock = ready_timer_adapter()
     for index in range(9):
