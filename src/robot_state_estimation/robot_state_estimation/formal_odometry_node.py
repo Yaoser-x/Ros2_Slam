@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Publish formal odometry and TF only from fresh current-session wheel evidence."""
 
+import signal
 import time
 from typing import Optional
 import rclpy
+from rclpy.signals import SignalHandlerOptions
 from rclpy.impl.implementation_singleton import rclpy_implementation as _rclpy
 from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
@@ -126,7 +128,9 @@ class FormalOdometryNode(Node):
 
 
 def main(args=None) -> None:
-    rclpy.init(args=args)
+    rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
     node = FormalOdometryNode()
     try:
         rclpy.spin(node)

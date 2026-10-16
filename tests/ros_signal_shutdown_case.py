@@ -14,7 +14,7 @@ from geometry_msgs.msg import Twist
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.duration import Duration
 from rclpy.qos import QoSProfile
-from robot_interfaces.msg import HostMotionCommand, WheelObservation
+from robot_interfaces.msg import FirmwareControlState, HostMotionCommand, ImuObservation, WheelObservation
 
 
 def main():
@@ -24,6 +24,11 @@ def main():
         "mux": ("cmd_vel/test", Twist),
         "supervisor": ("wheel/observation", WheelObservation),
         "bridge": ("chassis/host_motion_command", HostMotionCommand),
+        "compatibility": ("wheel/observation", WheelObservation),
+        "operations": ("chassis/firmware_control_state", FirmwareControlState),
+        "wheel": ("wheel/observation", WheelObservation),
+        "imu": ("imu/observation", ImuObservation),
+        "odometry": ("wheel/observation", WheelObservation),
     }[kind]
     rclpy.init()
     fixture = rclpy.create_node("signal_fixture", namespace=namespace)
@@ -44,11 +49,19 @@ def main():
         message = message_type()
         if kind != "mux":
             message.header.stamp = fixture.get_clock().now().to_msg()
-        if kind == "supervisor":
+        if isinstance(message, WheelObservation):
             message.schema_version = WheelObservation.SCHEMA_VERSION
             message.transport_session_id = 7
             message.status_sequence = sequence
             message.motor_enabled_mask = message.speed_valid_mask = 6
+        if kind == "imu":
+            message.schema_version = ImuObservation.SCHEMA_VERSION
+            message.transport_session_id = 7
+            message.sample_sequence = sequence
+            message.mcu_sample_time_ms = sequence * 10
+        if kind == "operations":
+            message.wire_session_id = 7
+            message.status_sequence = sequence
         if kind == "bridge":
             message.command_epoch, message.sequence = 7, sequence
             message.enable = False

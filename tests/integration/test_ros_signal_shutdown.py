@@ -13,6 +13,11 @@ SOURCES = {
     "mux": ROOT / "src/robot_control/robot_control/cmd_vel_mux.py",
     "supervisor": ROOT / "src/robot_supervision/robot_supervision/motion_supervisor_node.py",
     "bridge": ROOT / "src/stm32_robot_bridge/stm32_robot_bridge/bridge_node_v3.py",
+    "compatibility": ROOT / "src/robot_config/robot_config/compatibility_node.py",
+    "operations": ROOT / "src/robot_chassis_ops/robot_chassis_ops/chassis_ops_node.py",
+    "wheel": ROOT / "src/robot_state_estimation/robot_state_estimation/wheel_odometry_node.py",
+    "imu": ROOT / "src/robot_state_estimation/robot_state_estimation/imu_adapter_node.py",
+    "odometry": ROOT / "src/robot_state_estimation/robot_state_estimation/formal_odometry_node.py",
 }
 
 

@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Publish the machine-readable runtime compatibility gate."""
 
+import signal
 from typing import Optional
 
 import rclpy
+from rclpy.signals import SignalHandlerOptions
 from rclpy.impl.implementation_singleton import rclpy_implementation as _rclpy
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -150,7 +152,9 @@ class PlatformCompatibilityNode(Node):
 
 
 def main(args=None) -> None:
-    rclpy.init(args=args)
+    rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
     node = PlatformCompatibilityNode()
     try:
         rclpy.spin(node)

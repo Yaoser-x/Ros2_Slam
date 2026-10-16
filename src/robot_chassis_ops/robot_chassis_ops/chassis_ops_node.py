@@ -2,10 +2,12 @@
 """Expose chassis operations without claiming queue admission means applied."""
 
 from dataclasses import dataclass
+import signal
 import time
 from typing import Any
 
 import rclpy
+from rclpy.signals import SignalHandlerOptions
 from rclpy.impl.implementation_singleton import rclpy_implementation as _rclpy
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.clock import Clock, ClockType
@@ -242,7 +244,9 @@ class ChassisOpsNode(Node):
 
 
 def main(args=None):
-    rclpy.init(args=args)
+    rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
     node = ChassisOpsNode()
     try:
         rclpy.spin(node)

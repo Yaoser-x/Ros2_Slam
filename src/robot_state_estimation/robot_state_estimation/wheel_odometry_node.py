@@ -2,8 +2,10 @@
 """Convert raw wheel observations into formal wheel odometry."""
 
 import math
+import signal
 
 import rclpy
+from rclpy.signals import SignalHandlerOptions
 from rclpy.impl.implementation_singleton import rclpy_implementation as _rclpy
 from builtin_interfaces.msg import Time as TimeMessage
 from nav_msgs.msg import Odometry
@@ -211,7 +213,9 @@ class WheelOdometryNode(Node):
 
 
 def main(args=None) -> None:
-    rclpy.init(args=args)
+    rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
     node = WheelOdometryNode()
     try:
         rclpy.spin(node)

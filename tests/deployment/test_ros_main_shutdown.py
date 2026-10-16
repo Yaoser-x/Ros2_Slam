@@ -108,8 +108,13 @@ def test_shutdown_does_not_swallow_unrelated_runtime_error(package, module, cons
 
 
 @pytest.mark.parametrize("package,module,constructor", [
+    ("robot_config", "compatibility_node", "PlatformCompatibilityNode"),
+    ("robot_chassis_ops", "chassis_ops_node", "ChassisOpsNode"),
     ("robot_supervision", "motion_supervisor_node", "MotionSupervisorNode"),
     ("robot_control", "cmd_vel_mux", "CmdVelMuxNode"),
+    ("robot_state_estimation", "wheel_odometry_node", "WheelOdometryNode"),
+    ("robot_state_estimation", "imu_adapter_node", "ImuAdapterNode"),
+    ("robot_state_estimation", "formal_odometry_node", "FormalOdometryNode"),
 ])
 def test_python_signal_interrupt_cleans_up_before_context_is_shutdown(package, module, constructor):
     main, events = entrypoint(
