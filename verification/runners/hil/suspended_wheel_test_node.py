@@ -31,6 +31,7 @@ def main(argv=None):
     from geometry_msgs.msg import Twist
     from nav_msgs.msg import Odometry
     from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
+    from rclpy.executors import SingleThreadedExecutor
     from robot_interfaces.msg import (
         ChassisLinkState,
         FirmwareControlState,
@@ -51,6 +52,8 @@ def main(argv=None):
     gate = BaseReadiness("real", freshness_limit(params))
     rclpy.init()
     node = rclpy.create_node("suspended_wheel_acceptance")
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
     publisher = node.create_publisher(Twist, "/cmd_vel/test", 10)
     info_client = node.create_client(Trigger, "/stm32_bridge/wire_get_info")
     info_requests = []
@@ -136,7 +139,7 @@ def main(argv=None):
                     + "\n"
                 )
                 next_send = now + 0.05
-            rclpy.spin_once(node, timeout_sec=0.01)
+            executor.spin_once(timeout_sec=0.01)
             if require_ready:
                 reason = gate.reason(time.monotonic())
                 if reason:
@@ -170,7 +173,7 @@ def main(argv=None):
         while time.monotonic() < until and (gate.reason(time.monotonic()) or "wheel" not in latest):
             # Rearm requires source silence. Even zero Twist is a fresh input;
             # observe readiness before admitting any test command.
-            rclpy.spin_once(node, timeout_sec=0.05)
+            executor.spin_once(timeout_sec=0.05)
         reason = gate.reason(time.monotonic())
         if reason or "wheel" not in latest:
             raise RuntimeError(reason or "no raw wheel observations")
@@ -214,6 +217,7 @@ def main(argv=None):
             stop("final_stop")
         except Exception as exc:
             failures.append(f"final stop: {type(exc).__name__}: {exc}")
+        executor.shutdown()
         node.destroy_node()
         rclpy.try_shutdown()
         events.close()
