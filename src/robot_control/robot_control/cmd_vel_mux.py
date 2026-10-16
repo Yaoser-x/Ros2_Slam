@@ -556,6 +556,11 @@ def main() -> None:
     except _rclpy.RCLError:
         if node.context.ok():
             raise
+    except RuntimeError as exc:
+        if node.context.ok() or str(exc) != (
+            "Unable to convert call argument to Python object (compile in debug mode for details)"
+        ):
+            raise
     finally:
         node.destroy_node()
         rclpy.try_shutdown()

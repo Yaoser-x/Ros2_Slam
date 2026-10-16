@@ -102,12 +102,18 @@ def test_shutdown_does_not_swallow_unrelated_runtime_error(package, module, cons
 
 
 @pytest.mark.parametrize("context_ok", [False, True], ids=["shutdown", "live-context"])
-def test_supervisor_message_conversion_shutdown_race_requires_invalid_context(context_ok):
+@pytest.mark.parametrize("package,module,constructor", [
+    ("robot_supervision", "motion_supervisor_node", "MotionSupervisorNode"),
+    ("robot_control", "cmd_vel_mux", "CmdVelMuxNode"),
+])
+def test_message_conversion_shutdown_race_requires_invalid_context(
+    package, module, constructor, context_ok
+):
     error = RuntimeError(
         "Unable to convert call argument to Python object (compile in debug mode for details)"
     )
     main, events = entrypoint(
-        "robot_supervision", "motion_supervisor_node", "MotionSupervisorNode",
+        package, module, constructor,
         context_ok=context_ok, failure=error,
     )
     if context_ok:
