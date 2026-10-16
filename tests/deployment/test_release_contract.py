@@ -9,7 +9,7 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[2]
-FIRMWARE_COMMIT = "158254bd5c21f74a64f1d7c8609475a4c7caa1c7"
+FIRMWARE_COMMIT = "ba670e6454c4c46fff8d1e26bff57d58b5e08cac"
 
 
 def test_firmware_contract_pins_v3_candidate_and_remains_hil_blocked() -> None:
