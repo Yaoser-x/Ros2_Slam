@@ -280,6 +280,13 @@ def main(args=None) -> None:
     except _rclpy.RCLError:
         if node.context.ok():
             raise
+    except RuntimeError as exc:
+        # Humble may race signal-driven context teardown while converting a
+        # taken subscription message. Other runtime failures remain visible.
+        if node.context.ok() or str(exc) != (
+            "Unable to convert call argument to Python object (compile in debug mode for details)"
+        ):
+            raise
     finally:
         node.destroy_node()
         rclpy.try_shutdown()
