@@ -13,6 +13,7 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "launch_scripts"))
 from base_cmd_test_node import PhaseStats
 from base_test_readiness import BaseReadiness, freshness_limit, runtime_topics
+from evidence_writer import EvidenceWriter
 from suspended_wheel_evidence import (
     PHASES,
     direction_observed,
@@ -62,7 +63,7 @@ def main(argv=None):
     )
     args.report.parent.mkdir(parents=True, exist_ok=True)
     events_path = args.report.with_suffix(".messages.jsonl")
-    events = events_path.open("w", encoding="utf-8")
+    events = EvidenceWriter(events_path)
     latest, counts, wheel_samples, phases, failures = {}, {}, [], [], []
     active, current, phase = False, None, "startup"
     requested = (0.0, 0.0)
@@ -118,6 +119,7 @@ def main(argv=None):
         message = Twist()
         message.linear.x, message.angular.z = vx, wz
         while time.monotonic() < until:
+            events.check()
             now = time.monotonic()
             if (
                 phase == "constant"
@@ -220,7 +222,10 @@ def main(argv=None):
         executor.shutdown()
         node.destroy_node()
         rclpy.try_shutdown()
-        events.close()
+        try:
+            events.close()
+        except Exception as exc:
+            failures.append(f"evidence flush: {type(exc).__name__}: {exc}")
     report = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "environment": "suspended_wheels",
@@ -235,6 +240,7 @@ def main(argv=None):
         "firmware": latest.get("firmware"),
         "config_manifest": yaml.safe_load((params_path.parent / "manifest.yaml").read_text()),
         "messages": str(events_path),
+        "evidence_writer": events.summary(),
         "physical_yaw_calibration": False,
         "formal_release_compatible": False,
         "additional_acceptance": {
