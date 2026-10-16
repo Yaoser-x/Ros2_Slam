@@ -27,7 +27,30 @@ def load_catalog(path: Path) -> Dict[str, Any]:
         raise ValueError("unsupported rosbag dataset catalog")
     if not catalog.get("required_topics") or not catalog.get("datasets"):
         raise ValueError("catalog must define required_topics and datasets")
+    for dataset in catalog["datasets"]:
+        required, events = topic_requirements(catalog, dataset)
+        if set(required) & set(events) or not required:
+            raise ValueError(f"invalid topic requirements: {dataset}")
+        if (set(required) | set(events)) - set(catalog["required_topics"]):
+            raise ValueError(f"unknown topic in dataset profile: {dataset}")
     return catalog
+
+
+def topic_requirements(
+    catalog: Dict[str, Any], dataset: str
+) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
+    """Continuous facts must exist; event topics may legitimately contain no messages."""
+    spec = catalog["datasets"][dataset]
+    profile_name = spec.get("topic_profile")
+    if profile_name is None:
+        return tuple(str(topic) for topic in catalog["required_topics"]), ()
+    if profile_name not in catalog.get("topic_profiles", {}):
+        raise ValueError(f"unknown topic profile: {profile_name}")
+    profile = catalog["topic_profiles"][profile_name]
+    return (
+        tuple(str(topic) for topic in profile["required_topics"]),
+        tuple(str(topic) for topic in profile.get("event_topics", ())),
+    )
 
 
 def validate_run_metadata(catalog: Dict[str, Any], metadata: Dict[str, Any]) -> Tuple[str, ...]:
@@ -78,7 +101,7 @@ def validate_metadata(
         if topic:
             message_counts[str(topic)] = int(item.get("message_count", 0))
 
-    required = tuple(str(topic) for topic in catalog["required_topics"])
+    required, _ = topic_requirements(catalog, dataset)
     missing = tuple(topic for topic in required if topic not in message_counts)
     empty = tuple(
         topic for topic in required if message_counts.get(topic, 0) == 0 and topic not in missing

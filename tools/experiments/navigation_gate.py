@@ -76,7 +76,10 @@ def evaluate_runs(contract: Dict[str, Any], runs: Sequence[Dict[str, Any]]) -> N
             recovery_count = -1
         if recovery_count < 0:
             coverage_errors.append(f"run {index}: invalid recovery_count")
-        for field in ("collision", "manual_intervention", "unexpected_motion"):
+        boolean_fields = ["collision", "manual_intervention", "unexpected_motion"]
+        if "communication_degradation_count" in contract["acceptance"]:
+            boolean_fields.append("communication_degradation")
+        for field in boolean_fields:
             if not isinstance(run.get(field), bool):
                 coverage_errors.append(f"run {index}: {field} must be bool")
 
@@ -95,6 +98,9 @@ def evaluate_runs(contract: Dict[str, Any], runs: Sequence[Dict[str, Any]]) -> N
         "collision_count": sum(run.get("collision") is True for run in runs),
         "manual_intervention_count": sum(run.get("manual_intervention") is True for run in runs),
         "unexpected_motion_count": sum(run.get("unexpected_motion") is True for run in runs),
+        "communication_degradation_count": sum(
+            run.get("communication_degradation") is True for run in runs
+        ),
     }
     failed = tuple(
         name

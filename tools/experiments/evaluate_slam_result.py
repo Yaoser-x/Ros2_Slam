@@ -11,7 +11,7 @@ from experiment_gate import evaluate_metrics, load_experiment
 
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_CONFIG = ROOT / "verification" / "configs" / "experiments" / "slam-sweep-v0.4.0.yaml"
+DEFAULT_CONFIG = ROOT / "verification" / "configs" / "experiments" / "slam-sweep-v0.6.0-rc2.yaml"
 
 
 def main() -> int:

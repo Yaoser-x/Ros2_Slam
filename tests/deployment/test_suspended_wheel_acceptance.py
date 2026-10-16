@@ -61,7 +61,9 @@ def test_stop_cannot_use_queued_samples_from_before_stop_or_stale_samples():
         samples, not_before_ns=10_000_000_000, now_ns=10_400_000_000
     )
     assert not evidence.three_sample_stop(samples, now_ns=9_999_999_999)
-    assert not evidence.three_sample_stop([wheel(index) for index in range(3)], now_ns=10_200_000_000)
+    assert not evidence.three_sample_stop(
+        [wheel(index) for index in range(3)], now_ns=10_200_000_000
+    )
 
 
 @pytest.mark.parametrize(
@@ -108,3 +110,32 @@ def test_suspended_environment_is_hashed_before_launch_and_cannot_enable_fake_or
     ):
         with pytest.raises(ConfigError):
             runtime_overrides(arguments, config, {})
+
+
+def test_low_speed_capability_does_not_replace_command_or_stop_evidence():
+    result = evidence.classify_motion_phase("creep", "NO_MOTION", False, True)
+    assert result["mandatory_pass"]
+    assert result["low_speed_capability"] == "NOT_DEMONSTRATED"
+    assert result["physical_stop"] == "NOT_APPLICABLE_NO_PROVEN_MOTION"
+    assert not evidence.classify_motion_phase("forward", "NO_MOTION", False, True)["mandatory_pass"]
+    assert not evidence.classify_motion_phase("creep", "NO_ODOM", False, True)["mandatory_pass"]
+    assert not evidence.classify_motion_phase("creep", "EXECUTED", True, False)["mandatory_pass"]
+    moved = evidence.classify_motion_phase("creep", "EXECUTED", True, True)
+    assert moved["mandatory_pass"] and moved["physical_stop"] == "PENDING"
+
+
+def test_command_delivery_requires_fresh_host_and_mcu_sequences():
+    wheels = [wheel(index, target=[0, 0.01, 0.01, 0]) for index in range(3)]
+    commands = [
+        {
+            "enable": True,
+            "sequence": index,
+            "command_epoch": 1,
+            "twist": {"linear": {"x": 0.01}, "angular": {"z": 0.0}},
+        }
+        for index in range(3)
+    ]
+    assert evidence.command_delivery_observed(wheels, commands, 0.01, 0.0)
+    assert not evidence.command_delivery_observed(wheels, commands[:1] * 3, 0.01, 0.0)
+    assert not evidence.command_delivery_observed(wheels[:1] * 3, commands, 0.01, 0.0)
+    assert not evidence.command_delivery_observed(wheels, commands, 0.05, 0.0)

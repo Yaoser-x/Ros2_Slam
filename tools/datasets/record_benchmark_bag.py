@@ -16,7 +16,7 @@ from benchmark_bags import build_record_plan, load_catalog
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CATALOG = (
-    ROOT / "verification" / "configs" / "benchmarks" / "rosbag-datasets-v0.5.0-rc1.yaml"
+    ROOT / "verification" / "configs" / "benchmarks" / "rosbag-datasets-v0.6.0-rc2.yaml"
 )
 
 

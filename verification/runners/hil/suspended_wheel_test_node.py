@@ -16,7 +16,10 @@ from base_test_readiness import BaseReadiness, freshness_limit, runtime_topics
 from evidence_writer import EvidenceWriter
 from suspended_wheel_evidence import (
     PHASES,
+    classify_motion_phase,
+    command_delivery_observed,
     direction_observed,
+    host_command_zero,
     opposite_feedback,
     three_sample_stop,
     wheel_guard,
@@ -65,6 +68,7 @@ def main(argv=None):
     events_path = args.report.with_suffix(".messages.jsonl")
     events = EvidenceWriter(events_path)
     latest, counts, wheel_samples, phases, failures = {}, {}, [], [], []
+    command_samples = []
     active, current, phase = False, None, "startup"
     requested = (0.0, 0.0)
     session = None
@@ -88,6 +92,8 @@ def main(argv=None):
                     raise RuntimeError("wire session changed during acceptance")
                 if opposite_feedback(value, *requested):
                     raise RuntimeError("wheel feedback opposite to current motion request")
+        if kind == "command":
+            command_samples.append(value)
         if kind == "odom" and current is not None:
             import math
 
@@ -161,9 +167,19 @@ def main(argv=None):
                 wheel_samples,
                 not_before_ns=not_before_ns,
                 now_ns=node.get_clock().now().nanoseconds,
+            ) and (
+                "command" in latest
+                and latest["command"][0] >= began
+                and host_command_zero(latest["command"][1])
             ):
                 phases.append(
-                    {"label": label, "result": "STOPPED", "seconds": time.monotonic() - began}
+                    {
+                        "label": label,
+                        "result": "STOPPED",
+                        "command_zero": "PASS",
+                        "stationary_evidence": "PASS",
+                        "seconds": time.monotonic() - began,
+                    }
                 )
                 return
         raise RuntimeError(
@@ -187,6 +203,7 @@ def main(argv=None):
             phase = label
             current = PhaseStats(label, vx, wz, duration)
             wheel_samples.clear()
+            command_samples.clear()
             print(f"MOTION {label}: vx={vx}m/s wz={wz}rad/s duration={duration}s", flush=True)
             spin_command(vx, wz, duration)
             if label == "constant" and (
@@ -195,7 +212,13 @@ def main(argv=None):
             ):
                 raise RuntimeError("three GET_INFO requests were not queued successfully")
             result = current.execution_status()
-            if result != "EXECUTED" or not direction_observed(wheel_samples, vx, wz):
+            classification = classify_motion_phase(
+                label,
+                result,
+                direction_observed(wheel_samples, vx, wz),
+                command_delivery_observed(wheel_samples, command_samples, vx, wz),
+            )
+            if not classification["mandatory_pass"]:
                 raise RuntimeError(
                     f"{label}: odometry or raw wheel direction not proven ({result})"
                 )
@@ -207,10 +230,14 @@ def main(argv=None):
                     "duration": duration,
                     "result": result,
                     "summary": current.summary_line(),
+                    **classification,
                 }
             )
             print(current.summary_line(), flush=True)
             stop("stop_after_" + label)
+            phases[-2]["command_convergence_to_zero"] = "PASS"
+            if classification["motion_proven"]:
+                phases[-2]["physical_stop"] = "PASS"
     except Exception as exc:
         failures.append(f"{type(exc).__name__}: {exc}")
     finally:
@@ -229,7 +256,21 @@ def main(argv=None):
     report = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "environment": "suspended_wheels",
-        "result": "PASS" if not failures and len(phases) >= len(PHASES) * 2 else "FAIL",
+        "schema_version": 2,
+        "result": (
+            "PASS"
+            if not failures
+            and all(
+                any(
+                    item.get("label") == label
+                    and item.get("mandatory_pass")
+                    and item.get("command_convergence_to_zero") == "PASS"
+                    for item in phases
+                )
+                for label, *_ in PHASES
+            )
+            else "FAIL"
+        ),
         "failures": failures,
         "phases": phases,
         "message_counts": counts,

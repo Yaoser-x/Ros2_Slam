@@ -34,44 +34,123 @@ required_topics:
   - /platform/compatibility_state
   - /diagnostics
 
+topic_profiles:
+  base:
+    required_topics:
+      - /wheel/observation
+      - /wheel/odom
+      - /odom
+      - /tf
+      - /tf_static
+      - /chassis/link_state
+      - /chassis/firmware_control_state
+      - /chassis/host_control_state
+      - /motion/supervision_state
+      - /platform/compatibility_state
+      - /diagnostics
+    event_topics:
+      - /cmd_vel/nav
+      - /cmd_vel/teleop
+      - /cmd_vel/test
+      - /chassis/host_motion_command
+      - /navigation/guard_state
+      - /imu/observation
+      - /imu/data
+      - /scan
+  mapping:
+    required_topics:
+      - /scan
+      - /wheel/observation
+      - /wheel/odom
+      - /odom
+      - /tf
+      - /tf_static
+      - /chassis/link_state
+      - /chassis/firmware_control_state
+      - /chassis/host_control_state
+      - /motion/supervision_state
+      - /platform/compatibility_state
+      - /diagnostics
+    event_topics:
+      - /cmd_vel/teleop
+      - /cmd_vel/test
+      - /chassis/host_motion_command
+      - /cmd_vel/nav
+      - /navigation/guard_state
+      - /imu/observation
+      - /imu/data
+  navigation:
+    required_topics:
+      - /scan
+      - /wheel/observation
+      - /wheel/odom
+      - /odom
+      - /tf
+      - /tf_static
+      - /chassis/link_state
+      - /chassis/firmware_control_state
+      - /chassis/host_control_state
+      - /chassis/host_motion_command
+      - /motion/supervision_state
+      - /platform/compatibility_state
+      - /diagnostics
+      - /cmd_vel/nav
+      - /navigation/guard_state
+    event_topics:
+      - /cmd_vel/teleop
+      - /cmd_vel/test
+      - /imu/observation
+      - /imu/data
+
 datasets:
   bag_00_static:
+    topic_profile: base
     minimum_duration_sec: 600
     repetitions: 1
     procedure: 底盘 release 并静止 10 分钟，保持完整观测、估计与诊断链运行。
   bag_01_straight:
+    topic_profile: base
     minimum_duration_sec: 60
     repetitions: 6
     procedure: 以低、中、高速度分别正向和反向直行，保存外部距离基准。
   bag_02_rotation_cw:
+    topic_profile: base
     minimum_duration_sec: 60
     repetitions: 3
     procedure: 顺时针原地旋转五圈，保存外部角度基准和圈数。
   bag_03_rotation_ccw:
+    topic_profile: base
     minimum_duration_sec: 60
     repetitions: 3
     procedure: 逆时针原地旋转五圈，保存外部角度基准和圈数。
   bag_04_square:
+    topic_profile: base
     minimum_duration_sec: 90
     repetitions: 3
     procedure: 沿固定方形路线闭环，起终点使用同一外部位置和朝向基准。
   bag_05_figure8:
+    topic_profile: base
     minimum_duration_sec: 90
     repetitions: 3
     procedure: 沿固定 8 字路线行驶，覆盖左右转、交叉点和方向切换。
   bag_06_mapping_train:
+    topic_profile: mapping
     minimum_duration_sec: 300
     repetitions: 2
     procedure: 完整覆盖训练场地并形成真实闭环；仅用于参数搜索。
   bag_07_mapping_validation:
+    topic_profile: mapping
     minimum_duration_sec: 300
     repetitions: 2
     procedure: 使用独立路线和日期采集；只用于冻结候选的盲测验证。
   bag_08_navigation_validation:
+    topic_profile: navigation
     minimum_duration_sec: 600
-    repetitions: 50
+    repetitions: 1
+    navigation_trials: 50
     procedure: 固定地图和十个目标，每个目标五次，记录误差、恢复、接管和通信降级。
   bag_09_fault_injection:
+    topic_profile: base
     minimum_duration_sec: 300
     repetitions: 1
     procedure: 按故障矩阵注入编码器、IMU、通信、进程和重启故障并记录 rearm 链。

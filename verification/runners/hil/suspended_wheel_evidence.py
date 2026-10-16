@@ -12,6 +12,53 @@ PHASES = (
 )
 
 
+def classify_motion_phase(label, execution_status, direction_proven, command_proven):
+    """Keep capability observations separate from mandatory command and stop evidence."""
+    motion_proven = execution_status == "EXECUTED" and direction_proven
+    odom_valid = execution_status in ("NO_MOTION", "EXECUTED")
+    capability_only = label == "creep"
+    return {
+        "mandatory_pass": command_proven and odom_valid and (capability_only or motion_proven),
+        "motion_proven": motion_proven,
+        "low_speed_capability": (
+            ("OBSERVED" if motion_proven else "NOT_DEMONSTRATED")
+            if capability_only
+            else "NOT_APPLICABLE"
+        ),
+        "physical_stop": "PENDING" if motion_proven else "NOT_APPLICABLE_NO_PROVEN_MOTION",
+    }
+
+
+def command_delivery_observed(wheels, commands, vx, wz):
+    expected = (vx - wz * 0.178 / 2.0, vx + wz * 0.178 / 2.0)
+    delivered = [
+        sample
+        for sample in wheels
+        if all(
+            abs(sample["wheel_target_mps"][index] - target) <= 0.002
+            for index, target in zip((1, 2), expected)
+        )
+    ]
+    fresh_commands = [
+        sample
+        for sample in commands
+        if sample["enable"]
+        and abs(sample["twist"]["linear"]["x"] - vx) <= 0.002
+        and abs(sample["twist"]["angular"]["z"] - wz) <= 0.002
+    ]
+    return (
+        len({(sample["transport_session_id"], sample["status_sequence"]) for sample in delivered})
+        >= 3
+        and len({(sample["command_epoch"], sample["sequence"]) for sample in fresh_commands}) >= 3
+    )
+
+
+def host_command_zero(message):
+    return all(
+        value == 0 for field in ("linear", "angular") for value in message["twist"][field].values()
+    )
+
+
 def wheel_guard(message):
     for field in ("wheel_speed_mps", "wheel_target_mps", "motor_output_permille"):
         if len(message[field]) != 4 or not all(math.isfinite(value) for value in message[field]):

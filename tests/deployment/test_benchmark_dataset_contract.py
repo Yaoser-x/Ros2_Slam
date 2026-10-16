@@ -108,8 +108,29 @@ def test_metadata_validation_reports_missing_topics_duration_and_empty_streams()
 
     assert result.valid is False
     assert "/diagnostics" in result.missing_topics
-    assert "/imu/data" in result.empty_topics
+    assert "/imu/data" not in result.empty_topics  # Wheel-only IMU observation is event evidence.
     assert result.duration_ok is False
+
+
+def test_empty_event_topics_are_allowed_but_required_phase_facts_are_not():
+    module = load_module()
+    catalog = module.load_catalog(CONFIG_PATH)
+    facts, events = module.topic_requirements(catalog, "bag_00_static")
+    metadata = {
+        "rosbag2_bagfile_information": {
+            "duration": {"nanoseconds": 600_000_000_000},
+            "topics_with_message_count": [
+                {"topic_metadata": {"name": topic}, "message_count": 10} for topic in facts
+            ]
+            + [{"topic_metadata": {"name": topic}, "message_count": 0} for topic in events],
+        }
+    }
+    assert module.validate_metadata(catalog, "bag_00_static", metadata).valid
+    navigation = module.validate_metadata(catalog, "bag_08_navigation_validation", metadata)
+    assert not navigation.valid
+    assert "/scan" in navigation.empty_topics and "/cmd_vel/nav" in navigation.empty_topics
+    metadata["rosbag2_bagfile_information"]["topics_with_message_count"][0]["message_count"] = 0
+    assert not module.validate_metadata(catalog, "bag_00_static", metadata).valid
 
 
 def test_run_metadata_fails_closed_when_traceability_is_incomplete():

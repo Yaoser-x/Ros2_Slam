@@ -12,7 +12,9 @@ from navigation_gate import evaluate_runs, load_contract
 
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_CONTRACT = ROOT / "verification" / "configs" / "experiments" / "nav2-acceptance-v0.4.0.yaml"
+DEFAULT_CONTRACT = (
+    ROOT / "verification" / "configs" / "experiments" / "nav2-acceptance-v0.6.0-rc2.yaml"
+)
 
 
 def main() -> int:
