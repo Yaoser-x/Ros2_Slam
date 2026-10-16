@@ -487,6 +487,7 @@ def bridge_timer_adapter():
     classes = adapter_classes(
         Path(__file__).resolve().parents[1] / "stm32_robot_bridge/bridge_node_v3.py",
         time=clock,
+        Duration=lambda *, nanoseconds: nanoseconds,
         secrets=SessionIds(),
         BridgeCore=BridgeCore,
         BridgeState=BridgeState,
@@ -533,7 +534,7 @@ def bridge_timer_adapter():
     node.release_count = 0
     node.invalid_command_count = 0
     node._publish_link_state = lambda: None
-    node._publish_status = lambda _status, _disposition: None
+    node._publish_status = lambda _status, _disposition, _received_at: None
     node.get_clock = lambda: SimpleNamespace(
         now=lambda: SimpleNamespace(nanoseconds=round(clock.value * 1e9), to_msg=lambda: None)
     )
@@ -951,3 +952,22 @@ def test_sensor_batch_yields_without_dropping_frames_and_allows_fresh_host_callb
         node.control_tick()
     assert handled == [(index, bytes([index])) for index in range(6)]
     assert node.transport.events.empty()
+
+
+def test_observation_stamp_preserves_serial_queue_age_instead_of_refreshing_stale_data():
+    node, clock = bridge_timer_adapter()
+
+    class Stamp:
+        def __init__(self, nanoseconds):
+            self.nanoseconds = nanoseconds
+
+        def __sub__(self, duration_ns):
+            return Stamp(self.nanoseconds - duration_ns)
+
+        def to_msg(self):
+            return self.nanoseconds
+
+    node.get_clock = lambda: SimpleNamespace(now=lambda: Stamp(100_000_000_000))
+    clock.value = 1.6
+    assert node._receive_stamp(1.0) == 99_400_000_000
+    assert node._receive_stamp(1.6) == 100_000_000_000

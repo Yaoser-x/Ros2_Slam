@@ -417,7 +417,7 @@ class STM32BridgeV3(Node):
                     self.enabled_mask = status.motor_enabled_mask
                     self.last_status = status
                     self._record_ack_evidence(status, received_at)
-                    self._publish_status(status, disposition)
+                    self._publish_status(status, disposition, received_at)
                 elif disposition is StatusDisposition.OUT_OF_ORDER:
                     self.core.require_rearm(REARM_ACK_TIMEOUT)
                     self._begin_wire_session(request_info=True)
@@ -432,7 +432,7 @@ class STM32BridgeV3(Node):
                 )
                 if imu_identity_is_new(identity, self.last_imu_identity):
                     self.last_imu_identity = identity
-                    self._publish_imu(imu)
+                    self._publish_imu(imu, received_at)
             return
         if cmd == CMD_DIAGNOSTIC:
             decode_diagnostic_payload(payload)
@@ -469,8 +469,14 @@ class STM32BridgeV3(Node):
                     None if applied == self.command_stream.sequence else float(received_at)
                 )
 
-    def _publish_status(self, status, disposition: StatusDisposition) -> None:
-        receive_stamp = self.get_clock().now().to_msg()
+    def _receive_stamp(self, received_at: float):
+        # Queue residence must remain visible to downstream freshness checks.
+        now = self.get_clock().now()
+        age_ns = round(max(time.monotonic() - received_at, 0.0) * 1e9)
+        return (now - Duration(nanoseconds=age_ns)).to_msg()
+
+    def _publish_status(self, status, disposition: StatusDisposition, received_at: float) -> None:
+        receive_stamp = self._receive_stamp(received_at)
         observation = WheelObservation()
         observation.header.stamp = receive_stamp
         observation.header.frame_id = self.base_frame_id
@@ -515,9 +521,9 @@ class STM32BridgeV3(Node):
         self.right_current_pub.publish(Float32(data=sum(status.motor_current_a[2:])))
         self._publish_chassis_states(status)
 
-    def _publish_imu(self, imu) -> None:
+    def _publish_imu(self, imu, received_at: float) -> None:
         msg = ImuObservation()
-        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.stamp = self._receive_stamp(received_at)
         msg.header.frame_id = self.imu_frame_id
         msg.schema_version = ImuObservation.SCHEMA_VERSION
         msg.transport_session_id = self.core.snapshot.wire_session_id
