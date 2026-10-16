@@ -25,7 +25,7 @@ def software_report(name):
     pair = {
         "upper": {"commit": "a" * 40, "dirty": False, "source_sha256": "c" * 64},
         "firmware": {
-            "commit": "858aacb21266a6688aae85fa3a55497a9241881f",
+            "commit": "cf012dda6f4a83c8ff96a54f3623565df0fbd72f",
             "dirty": False,
             "source_sha256": "d" * 64,
         },
@@ -298,4 +298,4 @@ def test_ci_has_one_owner_for_build_test_and_pytest_coverage():
     assert "python3 -m pytest tests/ src/" not in workflow
     assert "coverage json -o coverage.json" in workflow
     assert "scripts/verify/check_coverage.py coverage.json" in workflow
-    assert "ref: 858aacb21266a6688aae85fa3a55497a9241881f" in workflow
+    assert "ref: cf012dda6f4a83c8ff96a54f3623565df0fbd72f" in workflow
