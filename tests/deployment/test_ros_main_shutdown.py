@@ -19,7 +19,10 @@ ENTRYPOINTS = (
     ("robot_state_estimation", "formal_odometry_node", "FormalOdometryNode"),
     ("robot_supervision", "motion_supervisor_node", "MotionSupervisorNode"),
 )
-BOUNDED_EXECUTORS = {"compatibility_node", "wheel_odometry_node", "imu_adapter_node"}
+BOUNDED_EXECUTORS = {
+    "compatibility_node", "chassis_ops_node", "cmd_vel_mux", "motion_supervisor_node",
+    "wheel_odometry_node", "imu_adapter_node", "formal_odometry_node",
+}
 
 
 class RCLError(RuntimeError):
@@ -30,7 +33,7 @@ class ExternalShutdownException(Exception):
     pass
 
 
-def entrypoint(package, module, constructor, *, context_ok, failure):
+def entrypoint(package, module, constructor, *, context_ok, failure, signal_to_send=2):
     path = ROOT / "src" / package / package / f"{module}.py"
     source = ast.parse(path.read_text(encoding="utf-8"))
     main = next(
@@ -55,6 +58,10 @@ def entrypoint(package, module, constructor, *, context_ok, failure):
     def spin(current):
         assert current is node
         events.append("spin")
+        if failure is None:
+            handler = dict(signal_handlers)[signal_to_send]
+            handler(signal_to_send, None)
+            return
         raise failure
 
     class Executor:
@@ -139,12 +146,17 @@ def test_shutdown_does_not_swallow_unrelated_runtime_error(package, module, cons
     ("robot_state_estimation", "imu_adapter_node", "ImuAdapterNode"),
     ("robot_state_estimation", "formal_odometry_node", "FormalOdometryNode"),
 ])
-def test_python_signal_interrupt_cleans_up_before_context_is_shutdown(package, module, constructor):
+@pytest.mark.parametrize("signal_to_send", [2, 15])
+def test_python_signal_flag_cleans_up_without_raising_during_message_conversion(
+    package, module, constructor, signal_to_send
+):
     main, events = entrypoint(
         package, module, constructor,
-        context_ok=True, failure=KeyboardInterrupt(),
+        context_ok=True, failure=None, signal_to_send=signal_to_send,
     )
     main()
     assert main.init_options[0]["signal_handler_options"] == "no-native-signal-handler"
-    assert main.signal_handlers == [(2, "python-interrupt"), (15, "python-interrupt")]
+    assert [kind for kind, handler in main.signal_handlers] == [2, 15]
+    assert main.signal_handlers[0][1] is main.signal_handlers[1][1]
+    assert callable(main.signal_handlers[0][1])
     assert events == expected_cleanup(module)

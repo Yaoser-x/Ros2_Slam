@@ -7,6 +7,7 @@ import time
 from typing import Any
 
 import rclpy
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.signals import SignalHandlerOptions
 from rclpy.impl.implementation_singleton import rclpy_implementation as _rclpy
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
@@ -245,17 +246,27 @@ class ChassisOpsNode(Node):
 
 def main(args=None):
     rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
-    signal.signal(signal.SIGINT, signal.default_int_handler)
-    signal.signal(signal.SIGTERM, signal.default_int_handler)
+    stop_requested = False
+
+    def request_stop(_signum, _frame):
+        nonlocal stop_requested
+        stop_requested = True
+
+    signal.signal(signal.SIGINT, request_stop)
+    signal.signal(signal.SIGTERM, request_stop)
     node = ChassisOpsNode()
+    executor = SingleThreadedExecutor(context=node.context)
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        while not stop_requested and node.context.ok():
+            executor.spin_once(timeout_sec=0.05)
     except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
         pass
     except _rclpy.RCLError:
         if node.context.ok():
             raise
     finally:
+        executor.shutdown()
         node.destroy_node()
         rclpy.try_shutdown()
 

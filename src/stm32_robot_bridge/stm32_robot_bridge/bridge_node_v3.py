@@ -767,15 +767,22 @@ class STM32BridgeV3(Node):
 def main(args=None) -> None:
     # Keep the context valid until the executor unwinds and serial stop is sent.
     rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
-    signal.signal(signal.SIGINT, signal.default_int_handler)
-    signal.signal(signal.SIGTERM, signal.default_int_handler)
+    stop_requested = False
+
+    def request_stop(_signum, _frame):
+        nonlocal stop_requested
+        stop_requested = True
+
+    signal.signal(signal.SIGINT, request_stop)
+    signal.signal(signal.SIGTERM, request_stop)
     node = STM32BridgeV3()
     # All ROS callbacks use the mutually exclusive default group, and serial
     # I/O already has its own owner. Keep state-machine callbacks on one thread.
-    executor = SingleThreadedExecutor()
+    executor = SingleThreadedExecutor(context=node.context)
     executor.add_node(node)
     try:
-        executor.spin()
+        while not stop_requested and node.context.ok():
+            executor.spin_once(timeout_sec=0.05)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:

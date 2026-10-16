@@ -154,14 +154,20 @@ class PlatformCompatibilityNode(Node):
 
 def main(args=None) -> None:
     rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
-    signal.signal(signal.SIGINT, signal.default_int_handler)
-    signal.signal(signal.SIGTERM, signal.default_int_handler)
+    stop_requested = False
+
+    def request_stop(_signum, _frame):
+        nonlocal stop_requested
+        stop_requested = True
+
+    signal.signal(signal.SIGINT, request_stop)
+    signal.signal(signal.SIGTERM, request_stop)
     node = PlatformCompatibilityNode()
     executor = SingleThreadedExecutor(context=node.context)
     executor.add_node(node)
     try:
         # Idle DDS waits must return so Python signal handlers can run.
-        while node.context.ok():
+        while not stop_requested and node.context.ok():
             executor.spin_once(timeout_sec=0.05)
     except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
         pass

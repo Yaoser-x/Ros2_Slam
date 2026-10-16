@@ -82,7 +82,10 @@ def main():
                 while time.monotonic() < until:
                     publish()
                 process.send_signal(getattr(signal, signal_name))
-                process.wait(timeout=8.0)
+                stop_deadline = time.monotonic() + 8.0
+                while process.poll() is None and time.monotonic() < stop_deadline:
+                    publish()
+                process.wait(timeout=max(stop_deadline - time.monotonic(), 0.01))
             finally:
                 if process.poll() is None:
                     process.kill()

@@ -25,6 +25,7 @@ _mock_sensor_msgs = MagicMock(name="sensor_msgs")
 sys.modules["rclpy"] = _mock_rclpy
 _mock_executors = ModuleType("rclpy.executors")
 _mock_executors.ExternalShutdownException = type("ExternalShutdownException", (Exception,), {})
+_mock_executors.SingleThreadedExecutor = MagicMock()
 sys.modules["rclpy.executors"] = _mock_executors
 _mock_implementation = ModuleType("rclpy.impl.implementation_singleton")
 _mock_implementation.rclpy_implementation = SimpleNamespace(
