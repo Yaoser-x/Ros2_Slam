@@ -6,10 +6,46 @@ import os
 import subprocess
 
 import yaml
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-FIRMWARE_COMMIT = "ba670e6454c4c46fff8d1e26bff57d58b5e08cac"
+FIRMWARE_COMMIT = "ba0f430f2a4cd150766bafea5fbc31c236b44fe0"
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [("firmware_commit", "0" * 40), ("hardware_revision", 0), ("firmware_parameter_crc32", 0)],
+)
+def test_version_guard_rejects_stale_calibration_identity(tmp_path, monkeypatch, key, value):
+    import shutil
+
+    files = (
+        "compatibility/firmware.yaml",
+        "verification/configs/release/v0.6.0-rc2.yaml",
+        "src/robot_config/config/calibration/robot_001/chassis_v1.yaml",
+        "docs/contracts/cross_repo_compatibility.yaml",
+        "README.md",
+        ".github/workflows/ci.yml",
+        "PLATFORM_API_VERSION",
+    )
+    for name in files:
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / name, target)
+    spec = importlib.util.spec_from_file_location(
+        "version_guard_calibration", ROOT / "scripts/verify/check_version_consistency.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, "ROOT", tmp_path)
+    assert module.main() == 0
+    path = tmp_path / "src/robot_config/config/calibration/robot_001/chassis_v1.yaml"
+    calibration = yaml.safe_load(path.read_text(encoding="utf-8"))
+    calibration["calibration_bundle"]["identity"][key] = value
+    path.write_text(yaml.safe_dump(calibration), encoding="utf-8")
+    with pytest.raises(AssertionError):
+        module.main()
 
 
 def test_firmware_contract_pins_v3_candidate_and_remains_hil_blocked() -> None:
