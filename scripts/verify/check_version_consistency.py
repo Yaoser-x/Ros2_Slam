@@ -10,7 +10,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 RELEASE = "v0.6.0-rc2"
 PLATFORM_API = 5
-FIRMWARE = "ba670e6454c4c46fff8d1e26bff57d58b5e08cac"
+FIRMWARE = "ba0f430f2a4cd150766bafea5fbc31c236b44fe0"
 
 
 def main() -> int:
@@ -30,7 +30,7 @@ def main() -> int:
     assert release["platform_api_version"] == PLATFORM_API
     assert release["firmware_candidate_commit"] == FIRMWARE
     assert FIRMWARE in ci
-    assert "Platform API 5" in readme and "ba670e6" in readme
+    assert "Platform API 5" in readme and "ba0f430" in readme
     assert not re.search(r"Platform API 4\s*/\s*Upper Protocol v3", readme)
     return 0
 

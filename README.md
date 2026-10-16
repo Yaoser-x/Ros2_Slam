@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | 雷达建图 | 已支持 | `YDLIDAR X2 -> /scan -> slam_toolbox` |
 | 摄像头建图 | 后续扩展 | 摄像头默认不进入当前激光 SLAM 主链路 |
-| 真实底盘导航 | 阻塞 | 固件候选 `ba670e6` 已冻结 upper v3；实读参数 CRC 已绑定，完整 UART HIL 和实车验收尚未完成 |
+| 真实底盘导航 | 阻塞 | 固件候选 `ba0f430` 已冻结 upper v3；实读参数 CRC 已绑定，完整 UART HIL 和实车验收尚未完成 |
 | 虚拟底盘联调 | 已支持 | `base_mode:=fake` |
 | 串口设备隔离 | 已支持 | 雷达可检测；底盘默认固定 `/dev/serial0`，`base_port=auto` 已废弃 |
 | 底盘 EKF 融合 | 实验开关 | 默认 wheel-only；正式 `/odom`/TF 始终由 `formal_odometry` 发布 |
@@ -60,7 +60,7 @@ cd /home/robot/ros2_ws
 - 默认导航行为树：`src/robot_bringup/behavior_trees/navigate_to_pose_recovery.xml`
 - 默认底盘命令时序：mux 250 ms、bridge 150 ms、keepalive 50 ms、固件 watchdog 200 ms
 - 上位机配置事实源：`src/robot_config/config`；固件参数由下位机管理，跨机以参数 CRC/标定包校验
-- Platform API 5 / Upper Protocol v3；固定下位机候选 `ba670e6`（本地联调候选，未打 tag），发布兼容仍为 false
+- Platform API 5 / Upper Protocol v3；固定下位机候选 `ba0f430`（本地联调候选，未打 tag），发布兼容仍为 false
 - 当前证据状态：软件单测、PTY 和黄金向量可重放；rc2 机器报告仍为 `NOT_RUN`，真实 UART HIL、参数 CRC、车辆、标定、SLAM/Nav2 和长稳均为 pending
 
 ## 仓库分层
