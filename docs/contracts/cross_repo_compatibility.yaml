@@ -4,7 +4,7 @@ wire_protocol: 3
 upper_baseline_commit: 2f16c8b9127a9534bade4fe9f3abb33643b4bd0b
 upper_release_candidate_commit: null
 upper_tested_commit: null
-firmware_candidate_commit: ba0f430f2a4cd150766bafea5fbc31c236b44fe0
+firmware_candidate_commit: 20b82da50d11e628bb1f95c8f1ebadf8e42a2553
 firmware_candidate_release: null
 firmware_tested_commit: null
 firmware_compatible_commit: null
