@@ -292,11 +292,13 @@ class BridgeCore:
         command_stamp_sec: float,
         now_ros_sec: float,
         now_monotonic: float,
+        received_monotonic: Optional[float] = None,
     ) -> CommandDecision:
         # Header/ROS time bounds queue admission.  Once accepted, safety lease
         # freshness starts at monotonic callback receipt and is unaffected by
         # later /clock changes.
-        values = (vx, wz, now_monotonic)
+        received_at = now_monotonic if received_monotonic is None else received_monotonic
+        values = (vx, wz, now_monotonic, received_at)
         if not all(math.isfinite(float(value)) for value in values):
             current = self.snapshot.command_session_id
             if current and int(session_id) == current:
@@ -320,6 +322,13 @@ class BridgeCore:
                 "session_id must be non-zero",
             )
         current_epoch = self.snapshot.command_session_id
+        if received_at > now_monotonic or now_monotonic - received_at > self.command_timeout_sec:
+            return self._reject_freshness(
+                session_id,
+                current_epoch,
+                CommandDisposition.REJECT_STALE,
+                "command receipt lease expired before processing",
+            )
         epoch_changed = current_epoch not in (0, session_id)
         if session_id in self._retired_host_epochs:
             return self._decision(
@@ -468,7 +477,7 @@ class BridgeCore:
             selected_source=normalized.source,
             target_vx=normalized.vx,
             target_wz=normalized.wz,
-            last_command_at=float(now_monotonic),
+            last_command_at=float(received_at),
         )
         return self._decision(
             CommandDisposition.ACCEPT_ENABLE,

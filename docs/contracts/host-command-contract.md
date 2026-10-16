@@ -11,6 +11,12 @@ an admission bound: stale or implausibly future commands are rejected before mut
 After admission, lease freshness uses callback receipt on the Host monotonic clock, so
 later `/clock` jumps cannot extend motion intent.
 
+The bridge captures receipt in a dedicated callback group and passes an immutable
+command through a bounded FIFO to its serialized state owner. Queue residence never
+renews that lease; an expired receipt cannot enable motion. Overflow revokes control
+and discards the entire pending batch. Disables, epoch changes and conflicting
+duplicates retain their order, and safety/session changes discard pending input.
+
 An invalid non-selected candidate is removed and diagnosed without interrupting the
 selected source. If the selected source becomes invalid, arbitration runs immediately:
 a fresh fallback remains enabled through the existing motion limiter, and Host release is

@@ -13,6 +13,7 @@ from stm32_robot_bridge.bridge_core import (
     StatusDisposition,
 )
 from stm32_robot_bridge.bridge_state import BridgeState
+from stm32_robot_bridge.command_inbox import CommandInbox, ReceivedCommand
 from stm32_robot_bridge.protocol_v3 import (
     ACK_APPLIED,
     ACK_RECEIVED,
@@ -456,6 +457,32 @@ def test_ros_adapter_has_no_external_state_machine_write():
     assert "core.machine." not in node_source
 
 
+def test_queued_receipt_never_refreshes_the_original_monotonic_lease():
+    core = ready_core()
+    core.on_status(status(sequence=3), 1.08)
+    result = core.accept_command(
+        vx=0.05, wz=0.0, enable=True, source=3, session_id=100, sequence=1,
+        command_stamp_sec=10.0, now_ros_sec=10.01,
+        received_monotonic=1.02, now_monotonic=1.12,
+    )
+    assert result.disposition is CommandDisposition.ACCEPT_ENABLE
+    assert core.snapshot.last_command_at == 1.02
+    assert not core.tick(1.16)[0]
+    assert core.tick(1.171) == (True, "command_timeout")
+
+
+@pytest.mark.parametrize("received_at", [0.95, 1.21, float("nan")])
+def test_expired_or_invalid_queued_receipt_cannot_enable(received_at):
+    core = ready_core()
+    result = core.accept_command(
+        vx=0.05, wz=0.0, enable=True, source=3, session_id=100, sequence=1,
+        command_stamp_sec=10.0, now_ros_sec=10.01,
+        received_monotonic=received_at, now_monotonic=1.20,
+    )
+    assert result.disposition is not CommandDisposition.ACCEPT_ENABLE
+    assert core.snapshot.target_vx == 0.0
+
+
 def bridge_timer_adapter():
     # Run the unchanged adapter methods with the real core, wire stream and
     # transport queue.  Only the ROS publisher shell and monotonic clock are
@@ -501,6 +528,7 @@ def bridge_timer_adapter():
         CommandDisposition=CommandDisposition,
         StatusDisposition=StatusDisposition,
         HostMotionCommand=object,
+        ReceivedCommand=ReceivedCommand,
         QoSProfile=object,
         ChassisLinkState=LinkState,
         WheelObservation=WheelObservation,
@@ -520,6 +548,7 @@ def bridge_timer_adapter():
         ACK_REJECTED=ACK_REJECTED,
         OutboundFrame=OutboundFrame,
         REARM_ACK_TIMEOUT=REARM_ACK_TIMEOUT,
+        REARM_HOST_REPLAY=1024,
     )
     node = classes.STM32BridgeV3.__new__(classes.STM32BridgeV3)
     node.core = BridgeCore(
@@ -543,6 +572,8 @@ def bridge_timer_adapter():
     node.ack_timeout = 0.15
     node.release_count = 0
     node.invalid_command_count = 0
+    node.command_queue_drop_count = 0
+    node.command_inbox = CommandInbox()
     node.warning_suppressed_count = 0
     node._warning_next_at = {}
     node._publish_link_state = lambda: None
@@ -641,6 +672,33 @@ def adapter_host_command(node, clock, sequence, *, target=0.2, enable=True, epoc
             sequence=sequence,
         )
     )
+    overflow, command = node.command_inbox.take()
+    assert not overflow and command is not None
+    node._apply_chassis_command(command)
+
+
+def test_receipt_callback_only_queues_and_safety_release_discards_prior_input():
+    node, clock = bridge_timer_adapter()
+    inbox = node.command_inbox
+    pending = ReceivedCommand(0, 0, False, 0, 100, 1, 1, 1, 1)
+    inbox.put(pending)
+    node._release("safety event")
+    assert inbox.take() == (False, None)
+    inbox.put(pending)
+    node._begin_wire_session(request_info=True)
+    assert inbox.take() == (False, None)
+
+
+def test_inbox_overflow_revokes_and_cannot_consume_pre_overflow_disable():
+    node, clock = bridge_timer_adapter()
+    node.command_inbox = CommandInbox(capacity=1)
+    node.command_inbox.put(ReceivedCommand(0, 0, False, 0, 100, 1, 1, 1, 1))
+    node.command_inbox.put(ReceivedCommand(0.05, 0, True, 3, 101, 1, 1, 1, 1))
+    node.control_tick()
+    assert node.command_queue_drop_count == 1
+    assert node.core.snapshot.rearm_required
+    assert not node.command_stream.enabled
+    assert node.core.snapshot.command_session_id == 0
 
 
 def queue_adapter_status(node, clock, sample):

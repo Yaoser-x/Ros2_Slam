@@ -12,8 +12,9 @@ import rclpy
 from rclpy.signals import SignalHandlerOptions
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from rclpy.clock import Clock, ClockType
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.duration import Duration
-from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
+from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import (
     DurabilityPolicy,
@@ -44,12 +45,14 @@ from stm32_robot_bridge.bridge_core import (
     REARM_ACK_TIMEOUT,
     REARM_ESTOP,
     REARM_FIRMWARE_REJECT,
+    REARM_HOST_REPLAY,
     REARM_TRANSPORT,
     BridgeCore,
     CommandDisposition,
     StatusDisposition,
 )
 from stm32_robot_bridge.bridge_state import BridgeState
+from stm32_robot_bridge.command_inbox import CommandInbox, ReceivedCommand
 from stm32_robot_bridge.protocol_v3 import (
     ACK_APPLIED,
     ACK_RECEIVED,
@@ -169,6 +172,8 @@ class STM32BridgeV3(Node):
         self._warning_next_at: dict[str, float] = {}
         self.last_status: Optional[StatusPayload] = None
         self.enabled_mask: Optional[int] = None
+        self.command_inbox = CommandInbox()
+        self.command_callback_group = MutuallyExclusiveCallbackGroup()
 
         if serial is None:
             raise RuntimeError("python3-serial is required")
@@ -225,6 +230,7 @@ class STM32BridgeV3(Node):
                 message_lost=self._on_command_message_lost,
                 use_default_callbacks=False,
             ),
+            callback_group=self.command_callback_group,
         )
         self.create_service(SetBool, "~/wire_estop", self.on_estop)
         self.create_service(Trigger, "~/wire_clear_fault", self.on_clear_fault)
@@ -240,19 +246,30 @@ class STM32BridgeV3(Node):
         self.last_imu_identity: Optional[Tuple[int, int, int]] = None
 
     def on_chassis_command(self, msg: HostMotionCommand) -> None:
-        now_ros = self.get_clock().now().nanoseconds * 1e-9
-        now_mono = time.monotonic()
+        # This callback only captures receipt facts. Core, wire stream, services
+        # and telemetry remain owned by the mutually exclusive default group.
+        received_mono = time.monotonic()
+        received_ros = self.get_clock().now().nanoseconds * 1e-9
         stamp = float(msg.header.stamp.sec) + float(msg.header.stamp.nanosec) * 1e-9
+        self.command_inbox.put(ReceivedCommand(
+            float(msg.twist.linear.x), float(msg.twist.angular.z), bool(msg.enable),
+            int(msg.host_subsource), int(msg.command_epoch), int(msg.sequence),
+            stamp, received_ros, received_mono,
+        ))
+
+    def _apply_chassis_command(self, command: ReceivedCommand) -> None:
+        now_mono = time.monotonic()
         decision = self.core.accept_command(
-            vx=msg.twist.linear.x,
-            wz=msg.twist.angular.z,
-            enable=bool(msg.enable),
-            source=int(msg.host_subsource),
-            session_id=int(msg.command_epoch),
-            sequence=int(msg.sequence),
-            command_stamp_sec=stamp,
-            now_ros_sec=now_ros,
+            vx=command.vx,
+            wz=command.wz,
+            enable=command.enable,
+            source=command.source,
+            session_id=command.session_id,
+            sequence=command.sequence,
+            command_stamp_sec=command.stamp_sec,
+            now_ros_sec=command.received_ros_sec,
             now_monotonic=now_mono,
+            received_monotonic=command.received_monotonic,
         )
         if decision.disposition is CommandDisposition.GLOBAL_RELEASE:
             self.invalid_command_count += 1
@@ -266,15 +283,17 @@ class STM32BridgeV3(Node):
                 self.invalid_command_count += 1
                 self._warn_bounded("ignored_command", f"ignored command: {decision.reason}")
             return
-        command = decision.validated_command
-        if command is None:  # defensive: accepted dispositions always carry a command
+        validated = decision.validated_command
+        if validated is None:  # defensive: accepted dispositions always carry a command
             self.invalid_command_count += 1
             self._release("accepted command decision has no validated command")
             return
-        if not command.enable:
+        if not validated.enable:
             self._release("")
             return
-        self.command_stream.update_command(command.vx, command.wz, now_mono)
+        self.command_stream.update_command(
+            validated.vx, validated.wz, command.received_monotonic
+        )
         if (
             self.pending_active_ack_started_at is None
             and self.command_stream.sequence != self.last_applied_sequence
@@ -294,6 +313,16 @@ class STM32BridgeV3(Node):
 
     def control_tick(self) -> None:
         began = time.monotonic()
+        for _ in range(32):
+            overflow, command = self.command_inbox.take()
+            if overflow:
+                self.command_queue_drop_count += 1
+                self.core.require_rearm(REARM_HOST_REPLAY)
+                self._release("command inbox overflow")
+                break
+            if command is None:
+                break
+            self._apply_chassis_command(command)
         # Publishing a batch of sensor messages must not monopolize the ROS
         # callback group and starve fresh Host commands. Never dequeue work
         # beyond this tick's budget; remaining frames retain their order.
@@ -359,6 +388,7 @@ class STM32BridgeV3(Node):
         self._begin_wire_session(request_info=True)
 
     def _begin_wire_session(self, *, request_info: bool) -> None:
+        self.command_inbox.clear()
         self.transport.clear_pending_observations()
         session = secrets.randbits(64) or 1
         self.core.on_connected(session)
@@ -554,6 +584,8 @@ class STM32BridgeV3(Node):
     def _release(
         self, reason: str, *, force_fresh: bool = False, publish_state: bool = True
     ) -> None:
+        if reason or force_fresh:
+            self.command_inbox.clear()
         was_pending = self.core.state is BridgeState.WAIT_POST_CLEAR_DISABLE_ACK
         pending_identity = (
             self.core.snapshot.wire_session_id,
@@ -741,6 +773,7 @@ class STM32BridgeV3(Node):
         self.diagnostics_pub.publish(array)
 
     def shutdown(self) -> None:
+        self.command_inbox.stop()
         try:
             # rclpy's signal handler may already have invalidated the context.
             self._release("", force_fresh=True, publish_state=False)
@@ -776,9 +809,9 @@ def main(args=None) -> None:
     signal.signal(signal.SIGINT, request_stop)
     signal.signal(signal.SIGTERM, request_stop)
     node = STM32BridgeV3()
-    # All ROS callbacks use the mutually exclusive default group, and serial
-    # I/O already has its own owner. Keep state-machine callbacks on one thread.
-    executor = SingleThreadedExecutor(context=node.context)
+    # Only receipt capture can run alongside telemetry; all state mutations
+    # remain serialized in the default callback group.
+    executor = MultiThreadedExecutor(num_threads=2, context=node.context)
     executor.add_node(node)
     try:
         while not stop_requested and node.context.ok():
@@ -786,8 +819,9 @@ def main(args=None) -> None:
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
-        node.shutdown()
+        node.command_inbox.stop()
         executor.shutdown()
+        node.shutdown()
         node.destroy_node()
         rclpy.try_shutdown()
 
