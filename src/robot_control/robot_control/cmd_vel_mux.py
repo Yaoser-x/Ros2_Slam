@@ -449,6 +449,11 @@ class CmdVelMuxNode(Node):
     def _on_chassis_state(self, msg: ChassisLinkState) -> None:
         wire_session = int(msg.wire_session_id)
         session_changed = wire_session != 0 and wire_session != self.last_wire_session_id
+        if session_changed:
+            # A disable seen before connect can already be retired by the new
+            # Bridge generation. Start its handshake with a fresh disabled epoch.
+            self.command_epoch = 0
+            self.sequence = 0
         self.last_wire_session_id = wire_session
         self.wire_ready = bool(
             msg.link_state
@@ -456,7 +461,7 @@ class CmdVelMuxNode(Node):
             and not msg.wire_rearm_required
             and msg.protocol_compatible
         )
-        if msg.wire_rearm_required or not self.wire_ready:
+        if session_changed or msg.wire_rearm_required or not self.wire_ready:
             self._latch_rearm(
                 int(msg.wire_rearm_reason_flags) or HostControlState.REARM_TRANSPORT,
                 HostControlState.REJECT_REARM_REQUIRED,

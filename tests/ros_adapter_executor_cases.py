@@ -281,8 +281,11 @@ def rearm_late_subscriber(executor, nodes):
     early_timer = fixture.create_timer(0.02, publish_unready)
     for node in nodes:
         executor.add_node(node)
-    spin_until(executor, lambda: bool(commands))
-    first = commands[0]
+    spin_until(executor, lambda: bool(commands)
+               and mux.last_wire_session_id == 0xFA4E000000000001
+               and commands[-1].command_epoch == mux.command_epoch)
+    first_index = len(commands)-1
+    first = commands[first_index]
     assert not first.enable and first.command_epoch
     spin_until(
         executor,
@@ -318,7 +321,7 @@ def rearm_late_subscriber(executor, nodes):
     assert fake.command_epoch == first.command_epoch
     assert fake.command_sequence > first.sequence, "the late reader must miss the initial release"
     assert all(not message.enable for message in commands)
-    assert all(message.command_epoch == first.command_epoch for message in commands)
+    assert all(message.command_epoch == first.command_epoch for message in commands[first_index:])
     sequence = mux.sequence
     spin_for(executor, 0.20)
     assert mux.sequence == sequence, "wire readiness must stop the disable retry"

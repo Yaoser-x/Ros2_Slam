@@ -549,6 +549,31 @@ class TestCmdVelMuxPublish:
             node._publish_selected()
         assert node.publisher.publish.call_count == 4
 
+    @pytest.mark.parametrize("already_wire_ready", [False, True])
+    def test_new_wire_session_uses_new_disabled_epoch_even_if_old_epoch_was_retired(
+        self, already_wire_ready
+    ):
+        from robot_control.control_policy import Command
+
+        node = make_mux()
+        node.last_wire_session_id = 7
+        node.command_epoch, node.sequence = 123, 9
+        node.mux.update("test", Command(0.05, 0.0), now_sec=0.0)
+        wire = SimpleNamespace(
+            wire_session_id=8, wire_rearm_required=not already_wire_ready,
+            wire_rearm_reason_flags=_FakeHostControlState.REARM_TRANSPORT,
+            link_state=_FakeChassisLinkState.STATE_WIRE_REARM_READY if already_wire_ready else 5,
+            protocol_compatible=True,
+        )
+        with patch("robot_control.cmd_vel_mux.secrets.randbits", return_value=456):
+            node._on_chassis_state(wire)
+        release = node.publisher.publish.call_args[0][0]
+        assert release.command_epoch == 456 and release.sequence == 1
+        assert not release.enable and node.rearm_required and not node.last_active
+        assert not node.mux.select(0.0).active
+        node._on_chassis_state(wire)
+        assert node.command_epoch == 456 and node.sequence == 1
+
     def test_stale_supervision_still_retries_disable_without_advancing_host_gate(self):
         node = make_mux(require_motion_supervision=True)
         node.rearm_required = True

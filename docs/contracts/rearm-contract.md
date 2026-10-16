@@ -34,6 +34,13 @@ lease，Guard 消失时不允许后端持续发布的 Twist 保留导航权限�
 wheel evidence 才能重新发布正式 odom/TF。这些时限不代表实测物理停车时间。
 # Bridge command decision boundary
 
+Mux starts a new disabled Host epoch whenever a nonzero wire session changes,
+including the first connection. Retries within that wire session retain the disabled
+epoch. This prevents a disable observed before serial connect from being retried
+forever after the Bridge retires its old Host generation. A new wire session also
+clears candidates and requires the quiet window and fresh Host intent, even when its
+first state message already reports wire readiness.
+
 The Bridge ROS adapter never maps an arbitrary callback error directly to a vehicle
 release. `BridgeCore` returns an explicit immutable decision. Idempotent duplicates,
 retired sessions and out-of-order sequences are diagnosed without mutating the current
