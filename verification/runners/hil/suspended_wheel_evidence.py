@@ -43,7 +43,7 @@ def opposite_feedback(message, vx, wz):
     )
 
 
-def three_sample_stop(samples):
+def three_sample_stop(samples, *, not_before_ns=None, now_ns=None):
     if len(samples) < 3:
         return False
     values = samples[-3:]
@@ -51,6 +51,16 @@ def three_sample_stop(samples):
         return False
     if len({sample["transport_session_id"] for sample in values}) != 1:
         return False
+    if not_before_ns is not None or now_ns is not None:
+        for sample in values:
+            stamp = sample.get("header", {}).get("stamp", {})
+            if "sec" not in stamp or "nanosec" not in stamp:
+                return False
+            sample_ns = int(stamp["sec"]) * 1_000_000_000 + int(stamp["nanosec"])
+            if not_before_ns is not None and sample_ns < not_before_ns:
+                return False
+            if now_ns is not None and not 0 <= now_ns - sample_ns <= 250_000_000:
+                return False
     return all(
         not wheel_guard(sample)
         and not any(sample["wheel_target_mps"])

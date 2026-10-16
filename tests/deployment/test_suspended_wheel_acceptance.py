@@ -49,6 +49,21 @@ def test_stationary_evidence_needs_distinct_current_session_samples_and_actual_c
         assert not evidence.three_sample_stop(changed)
 
 
+def test_stop_cannot_use_queued_samples_from_before_stop_or_stale_samples():
+    samples = [wheel(index) for index in range(3)]
+    for index, sample in enumerate(samples):
+        sample["header"] = {"stamp": {"sec": 10, "nanosec": index * 50_000_000}}
+    assert evidence.three_sample_stop(samples, not_before_ns=10_000_000_000, now_ns=10_200_000_000)
+    assert not evidence.three_sample_stop(
+        samples, not_before_ns=10_050_000_000, now_ns=10_200_000_000
+    )
+    assert not evidence.three_sample_stop(
+        samples, not_before_ns=10_000_000_000, now_ns=10_400_000_000
+    )
+    assert not evidence.three_sample_stop(samples, now_ns=9_999_999_999)
+    assert not evidence.three_sample_stop([wheel(index) for index in range(3)], now_ns=10_200_000_000)
+
+
 @pytest.mark.parametrize(
     "key,value",
     [

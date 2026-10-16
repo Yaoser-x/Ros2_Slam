@@ -149,9 +149,14 @@ def main(argv=None):
         phase, current = label, None
         wheel_samples.clear()
         began = time.monotonic()
+        not_before_ns = node.get_clock().now().nanoseconds
         while time.monotonic() - began < 0.8:
             spin_command(0.0, 0.0, 0.04, require_ready=False)
-            if three_sample_stop(wheel_samples):
+            if three_sample_stop(
+                wheel_samples,
+                not_before_ns=not_before_ns,
+                now_ns=node.get_clock().now().nanoseconds,
+            ):
                 phases.append(
                     {"label": label, "result": "STOPPED", "seconds": time.monotonic() - began}
                 )
