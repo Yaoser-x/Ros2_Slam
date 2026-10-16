@@ -163,6 +163,8 @@ class STM32BridgeV3(Node):
         self.command_deadline_miss_count = 0
         self.command_publisher_lost_count = 0
         self.command_queue_drop_count = 0
+        self.warning_suppressed_count = 0
+        self._warning_next_at: dict[str, float] = {}
         self.last_status: Optional[StatusPayload] = None
         self.enabled_mask: Optional[int] = None
 
@@ -260,7 +262,7 @@ class STM32BridgeV3(Node):
         ):
             if decision.disposition is not CommandDisposition.IGNORE_DUPLICATE:
                 self.invalid_command_count += 1
-                self.get_logger().warn(f"ignored command: {decision.reason}")
+                self._warn_bounded("ignored_command", f"ignored command: {decision.reason}")
             return
         command = decision.validated_command
         if command is None:  # defensive: accepted dispositions always carry a command
@@ -268,7 +270,7 @@ class STM32BridgeV3(Node):
             self._release("accepted command decision has no validated command")
             return
         if not command.enable:
-            self._release("command disabled")
+            self._release("")
             return
         self.command_stream.update_command(command.vx, command.wz, now_mono)
         if (
@@ -315,7 +317,8 @@ class STM32BridgeV3(Node):
         if release:
             command_age = None if before.last_command_at is None else now - before.last_command_at
             status_age = None if before.last_status_at is None else now - before.last_status_at
-            self.get_logger().warn(
+            self._warn_bounded(
+                "timing",
                 f"timing reason={reason} host_sequence={before.command_sequence} "
                 f"command_age={command_age} status_age={status_age} drain_sec={now-began:.6f}"
             )
@@ -570,7 +573,18 @@ class STM32BridgeV3(Node):
             if publish_state:
                 self._publish_link_state()
         if reason:
-            self.get_logger().warn(reason)
+            self._warn_bounded("release", reason)
+
+    def _warn_bounded(self, category: str, message: str) -> None:
+        # Humble's logger discovers the Python caller before applying its own
+        # throttle. Bound calls before entering that expensive path; safety
+        # decisions, state publication and counters above are never throttled.
+        now = time.monotonic()
+        if now < self._warning_next_at.get(category, 0.0):
+            self.warning_suppressed_count += 1
+            return
+        self._warning_next_at[category] = now + 1.0
+        self.get_logger().warn(message)
 
     def on_estop(self, request, response):
         if not request.data:
@@ -704,6 +718,7 @@ class STM32BridgeV3(Node):
             "dds_deadline_miss_count": self.command_deadline_miss_count,
             "publisher_liveliness_lost_count": self.command_publisher_lost_count,
             "command_queue_drop_count": self.command_queue_drop_count,
+            "rate_limited_warning_count": self.warning_suppressed_count,
             "command_timeout_sec": self.get_parameter("cmd_timeout").value,
             "status_timeout_sec": self.status_timeout,
             "serial_rx_frames": self.transport.stats.rx_frames,

@@ -63,6 +63,8 @@ ACK flags：`0x01 session_valid`、`0x02 received`、`0x04 applied`、`0x08 dupl
 
 Bridge 的串口线程保留每一帧 STATUS/ACK 的处理顺序，优先交给控制回调；高频 IMU 观测在尚未消费时保留最新样本，避免旧观测积压延迟安全状态。`serial_rx_coalesced_frames` 单独记录被新样本替代的帧数，与队列溢出丢帧计数区分。连接或 wire session 变化时丢弃待处理的旧 IMU 观测。WheelObservation 和 ImuObservation 的接收时间戳扣除队列驻留时间，使下游能发现延迟数据。控制回调仍受每次最多四个事件、约 4 ms 的批次预算约束；此策略不放宽命令、ACK 或状态超时。
 
+正常 Host disable 不产生警告；重复 release、ignored command 和 timeout 警告在进入日志接口前各限制为每秒一次，`rate_limited_warning_count` 记录省略次数。限频仅影响日志，不影响禁用帧、状态和拒绝计数。实机静止采样发现频繁日志的调用栈检查会占用 ROS 控制回调，因此不能依赖日志接口内部的限频来保护控制时限。
+
 ## HELLO 与能力门
 
 GET_INFO payload 仅为版本字节。固件响应 HELLO：

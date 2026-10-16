@@ -533,6 +533,8 @@ def bridge_timer_adapter():
     node.ack_timeout = 0.15
     node.release_count = 0
     node.invalid_command_count = 0
+    node.warning_suppressed_count = 0
+    node._warning_next_at = {}
     node._publish_link_state = lambda: None
     node._publish_status = lambda _status, _disposition, _received_at: None
     node.get_clock = lambda: SimpleNamespace(
@@ -971,3 +973,25 @@ def test_observation_stamp_preserves_serial_queue_age_instead_of_refreshing_stal
     clock.value = 1.6
     assert node._receive_stamp(1.0) == 99_400_000_000
     assert node._receive_stamp(1.6) == 100_000_000_000
+
+
+def test_repeated_fault_disables_keep_wire_actions_without_repeating_expensive_logger_calls():
+    node, clock = bridge_timer_adapter()
+    warnings = []
+
+    def expensive_logger(message):
+        warnings.append(message)
+        clock.value += 0.02
+
+    node.get_logger = lambda: SimpleNamespace(warn=expensive_logger)
+    for _ in range(30):
+        node._release("firmware ESTOP/fault-stop")
+        clock.value += 0.01
+    assert len(warnings) == 1
+    assert node.warning_suppressed_count == 29
+    assert node.release_count == 30
+    assert len(node.transport._outbound) == 30
+    assert not node.command_stream.enabled
+    clock.value += 1.0
+    node._release("firmware ESTOP/fault-stop")
+    assert len(warnings) == 2
