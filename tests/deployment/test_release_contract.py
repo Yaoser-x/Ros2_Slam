@@ -10,7 +10,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-FIRMWARE_COMMIT = "cf012dda6f4a83c8ff96a54f3623565df0fbd72f"
+FIRMWARE_COMMIT = "837cd9896636224b2a7aa40a9092b6fba3a7ccdd"
 
 
 @pytest.mark.parametrize(

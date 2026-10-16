@@ -25,7 +25,7 @@ calibration:
 calibration_bundle:
   identity:
     hardware_revision: 131072
-    firmware_commit: cf012dda6f4a83c8ff96a54f3623565df0fbd72f
+    firmware_commit: 837cd9896636224b2a7aa40a9092b6fba3a7ccdd
     firmware_parameter_crc32: 0x0D663E2A  # 实机生效参数；每次启动仍须核对
     upper_architecture_baseline_commit: 2f16c8b
     upper_config_sha256: pending_compile

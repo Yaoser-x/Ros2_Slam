@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: Yaoser-x/SlamRobot_Chassis_Control
-          ref: cf012dda6f4a83c8ff96a54f3623565df0fbd72f
+          ref: 837cd9896636224b2a7aa40a9092b6fba3a7ccdd
           path: firmware-contract
 
       - name: Configure git safe directory

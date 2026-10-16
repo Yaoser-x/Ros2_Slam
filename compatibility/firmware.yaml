@@ -19,7 +19,7 @@ protocol:
   required_capabilities: 31
 firmware:
   repository: Yaoser-x/SlamRobot_Chassis_Control
-  candidate_commit: cf012dda6f4a83c8ff96a54f3623565df0fbd72f
+  candidate_commit: 837cd9896636224b2a7aa40a9092b6fba3a7ccdd
   candidate_tag: null
   tested_commit: null
   compatible_commit: null
