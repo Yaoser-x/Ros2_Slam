@@ -244,6 +244,46 @@ def test_legacy_command_timing_enters_effective_config(compiled_workdir):
     assert bridge["drive_keepalive_sec"] == 0.06
 
 
+@pytest.mark.parametrize("mode", ["SYNCHRONOUS", "ASYNCHRONOUS"])
+def test_bridge_publication_environment_consumes_hashed_config(
+    compiled_workdir, launch_composer, mode
+):
+    paths, effective = compile_run(
+        compiled_workdir, overrides={"hardware": {"bridge_publication_mode": mode}}
+    )
+    nodes, _ = launch_composer(
+        ROOT / "src/stm32_robot_bridge/launch/stm32_bridge.launch.py",
+        {
+            "params_file": str(paths["ros_params"]),
+            "port": "/dev/serial0",
+            "namespace": "",
+            "allow_uncompiled_config": "false",
+        },
+    )
+    assert effective["hardware"]["bridge_publication_mode"] == mode
+    bridge = yaml_file(paths["ros_params"].parent, "ros-params.yaml")["stm32_bridge"]
+    assert bridge["ros__parameters"]["dds_publication_mode"] == mode
+    assert nodes[0]["additional_env"] == {
+        "RMW_FASTRTPS_PUBLICATION_MODE": mode,
+        "RMW_FASTRTPS_USE_QOS_FROM_XML": "0",
+    }
+
+
+def test_bridge_publication_mode_changes_config_identity(compiled_workdir):
+    hashes = []
+    for mode in ("SYNCHRONOUS", "ASYNCHRONOUS"):
+        _, effective = compile_run(
+            compiled_workdir / mode, overrides={"hardware": {"bridge_publication_mode": mode}}
+        )
+        hashes.append(effective["config_sha256"])
+    assert hashes[0] != hashes[1]
+    with pytest.raises(ConfigError, match="schema"):
+        compile_run(
+            compiled_workdir / "invalid",
+            overrides={"hardware": {"bridge_publication_mode": "UNSPECIFIED"}},
+        )
+
+
 def test_rehashed_file_cannot_hide_changed_effective_logical_identity(compiled_workdir):
     paths, _ = compile_run(compiled_workdir)
     effective = yaml_file(paths["effective"].parent, paths["effective"].name)

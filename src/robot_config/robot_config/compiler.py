@@ -385,6 +385,7 @@ def ros_parameters(config: Mapping[str, Any]) -> dict[str, Any]:
                 **common,
                 "port": config["hardware"]["base_port"],
                 "baudrate": config["hardware"]["baudrate"],
+                "dds_publication_mode": config["hardware"]["bridge_publication_mode"],
                 "protocol_version": 3,
                 "host_motion_command_topic": topics["host_motion_command"],
                 "chassis_link_state_topic": topics["chassis_link_state"],

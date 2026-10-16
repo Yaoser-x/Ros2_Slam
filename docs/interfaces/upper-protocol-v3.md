@@ -63,6 +63,8 @@ ACK flags：`0x01 session_valid`、`0x02 received`、`0x04 applied`、`0x08 dupl
 
 Bridge 的串口线程保留每一帧 STATUS/ACK 的处理顺序，优先交给控制回调；高频 IMU 观测在尚未消费时保留最新样本，避免旧观测积压延迟安全状态。`serial_rx_coalesced_frames` 单独记录被新样本替代的帧数，与队列溢出丢帧计数区分。连接或 wire session 变化时丢弃待处理的旧 IMU 观测。WheelObservation 和 ImuObservation 的接收时间戳扣除队列驻留时间，使下游能发现延迟数据。控制回调仍受每次最多四个事件、约 4 ms 的批次预算约束；此策略不放宽命令、ACK 或状态超时。
 
+Bridge 的 Host 接收回调使用独立互斥组，只记录不可变命令和实际接收时间；状态机仍由默认互斥组串行执行。32 项 FIFO 不合并 disable、重复冲突或会话切换，驻留时间不会续租，溢出会撤权。正式启动将硬件配置的 `bridge_publication_mode` 绑定到 Bridge 进程的 Fast DDS 环境，默认 `ASYNCHRONOUS`，并禁用 XML 覆写；该设置进入有效配置 hash，节点检查实际环境与编译产物一致。直接执行带编译参数的节点时也必须提供匹配环境。其他节点和系统环境不变；所有命令、ACK 和状态时限不变。
+
 正常 Host disable 不产生警告；重复 release、ignored command 和 timeout 警告在进入日志接口前各限制为每秒一次，`rate_limited_warning_count` 记录省略次数。限频仅影响日志，不影响禁用帧、状态和拒绝计数。实机静止采样发现频繁日志的调用栈检查会占用 ROS 控制回调，因此不能依赖日志接口内部的限频来保护控制时限。
 
 ## HELLO 与能力门

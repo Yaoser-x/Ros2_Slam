@@ -30,5 +30,7 @@ time. `HostControlState` exposes candidate/selected age plus DDS deadline, livel
 queue-loss counters; these counters are diagnostic facts, not physical stop evidence.
 
 Bridge always maps every Host subsource to Upper-v3 mode 2/`COMMAND_SOURCE_HOST`.
-Only the float32 wire target or disabled-to-enabled edge advances wire sequence;
-unchanged target frames reuse sequence as duplicate keepalives.
+The float32 wire target and disabled-to-enabled edge advance the wire sequence.
+Fresh Host commands with unchanged targets advance it at least once per second;
+pure retransmissions retain their identity and cannot outlive the firmware's two-second
+hard lifetime.

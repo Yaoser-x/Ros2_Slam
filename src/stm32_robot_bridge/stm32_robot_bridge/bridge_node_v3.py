@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import secrets
+import os
 import signal
 import time
 from typing import Optional, Tuple
@@ -114,6 +115,7 @@ class STM32BridgeV3(Node):
             "unsafe_development_mode": True,
             "port": "/dev/serial0",
             "baudrate": 115200,
+            "dds_publication_mode": "",
             "protocol_version": 3,
             "host_motion_command_topic": "chassis/host_motion_command",
             "chassis_link_state_topic": "chassis/link_state",
@@ -139,6 +141,12 @@ class STM32BridgeV3(Node):
         if int(self.get_parameter("protocol_version").value) != 3:
             raise RuntimeError("STM32 bridge Platform API 5 only supports upper protocol v3")
         self.config_sha256 = str(self.get_parameter("config_sha256").value)
+        expected_publication = str(self.get_parameter("dds_publication_mode").value)
+        if expected_publication and (
+            os.environ.get("RMW_FASTRTPS_PUBLICATION_MODE") != expected_publication
+            or os.environ.get("RMW_FASTRTPS_USE_QOS_FROM_XML", "0") != "0"
+        ):
+            raise RuntimeError("DDS publication environment differs from compiled config; use launch")
         self.steady_clock = Clock(clock_type=ClockType.STEADY_TIME)
         self.status_timeout = float(self.get_parameter("status_timeout").value)
         self.ack_timeout = float(self.get_parameter("command_ack_timeout_sec").value)
@@ -747,6 +755,7 @@ class STM32BridgeV3(Node):
         values = {
             "protocol": 3,
             "config_sha256": self.config_sha256,
+            "dds_publication_mode": os.environ.get("RMW_FASTRTPS_PUBLICATION_MODE", "UNSET"),
             "state": snapshot.state.name,
             "status_age": "none" if status_age is None else f"{status_age:.3f}",
             "wire_session": snapshot.wire_session_id,

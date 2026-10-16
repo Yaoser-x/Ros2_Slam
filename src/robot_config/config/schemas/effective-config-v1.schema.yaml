@@ -134,11 +134,12 @@ properties:
   hardware:
     type: object
     additionalProperties: false
-    required: [revision, base_port, lidar_port, baudrate, footprint_m,
+    required: [revision, base_port, lidar_port, baudrate, bridge_publication_mode, footprint_m,
                lidar_mount_xyz_m, lidar_mount_yaw_rad]
     properties:
       revision: {type: integer}
       base_port: {type: string}
+      bridge_publication_mode: {enum: [SYNCHRONOUS, ASYNCHRONOUS]}
       lidar_port: {type: string}
       baudrate: {type: integer}
       footprint_m: {type: array, minItems: 3}
