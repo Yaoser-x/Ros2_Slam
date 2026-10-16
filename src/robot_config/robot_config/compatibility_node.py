@@ -5,6 +5,7 @@ import signal
 from typing import Optional
 
 import rclpy
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.signals import SignalHandlerOptions
 from rclpy.impl.implementation_singleton import rclpy_implementation as _rclpy
 from rclpy.node import Node
@@ -156,14 +157,19 @@ def main(args=None) -> None:
     signal.signal(signal.SIGINT, signal.default_int_handler)
     signal.signal(signal.SIGTERM, signal.default_int_handler)
     node = PlatformCompatibilityNode()
+    executor = SingleThreadedExecutor(context=node.context)
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        # Idle DDS waits must return so Python signal handlers can run.
+        while node.context.ok():
+            executor.spin_once(timeout_sec=0.05)
     except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
         pass
     except _rclpy.RCLError:
         if node.context.ok():
             raise
     finally:
+        executor.shutdown()
         node.destroy_node()
         rclpy.try_shutdown()
 

@@ -19,6 +19,7 @@ ENTRYPOINTS = (
     ("robot_state_estimation", "formal_odometry_node", "FormalOdometryNode"),
     ("robot_supervision", "motion_supervisor_node", "MotionSupervisorNode"),
 )
+BOUNDED_EXECUTORS = {"compatibility_node", "wheel_odometry_node", "imu_adapter_node"}
 
 
 class RCLError(RuntimeError):
@@ -46,7 +47,8 @@ def entrypoint(package, module, constructor, *, context_ok, failure):
     events = []
     init_options, signal_handlers = [], []
     node = NS(
-        context=NS(ok=lambda: context_ok),
+        # The simulated context can become invalid while taking a message.
+        context=NS(ok=lambda: context_ok if "spin" in events else True),
         destroy_node=lambda: events.append("destroy"),
     )
 
@@ -54,6 +56,20 @@ def entrypoint(package, module, constructor, *, context_ok, failure):
         assert current is node
         events.append("spin")
         raise failure
+
+    class Executor:
+        def __init__(self, *, context):
+            assert context is node.context
+
+        def add_node(self, current):
+            assert current is node
+
+        def spin_once(self, *, timeout_sec):
+            assert timeout_sec == 0.05
+            spin(node)
+
+        def shutdown(self):
+            events.append("executor_shutdown")
 
     namespace = {
         "rclpy": NS(
@@ -65,6 +81,7 @@ def entrypoint(package, module, constructor, *, context_ok, failure):
             executors=NS(ExternalShutdownException=ExternalShutdownException),
         ),
         "_rclpy": NS(RCLError=RCLError),
+        "SingleThreadedExecutor": Executor,
         "ExternalShutdownException": ExternalShutdownException,
         "SignalHandlerOptions": NS(NO="no-native-signal-handler"),
         "signal": NS(SIGINT=2, SIGTERM=15, default_int_handler="python-interrupt",
@@ -75,6 +92,12 @@ def entrypoint(package, module, constructor, *, context_ok, failure):
     namespace["main"].init_options = init_options
     namespace["main"].signal_handlers = signal_handlers
     return namespace["main"], events
+
+
+def expected_cleanup(module):
+    return ["init", "spin"] + (
+        ["executor_shutdown"] if module in BOUNDED_EXECUTORS else []
+    ) + ["destroy", "shutdown"]
 
 
 @pytest.mark.parametrize(
@@ -92,7 +115,7 @@ def test_rcl_error_is_ignored_only_after_node_context_shutdown(
         assert raised.value is error
     else:
         main()
-    assert events == ["init", "spin", "destroy", "shutdown"]
+    assert events == expected_cleanup(module)
 
 
 @pytest.mark.parametrize(
@@ -104,7 +127,7 @@ def test_shutdown_does_not_swallow_unrelated_runtime_error(package, module, cons
     with pytest.raises(RuntimeError) as raised:
         main()
     assert raised.value is error
-    assert events == ["init", "spin", "destroy", "shutdown"]
+    assert events == expected_cleanup(module)
 
 
 @pytest.mark.parametrize("package,module,constructor", [
@@ -124,4 +147,4 @@ def test_python_signal_interrupt_cleans_up_before_context_is_shutdown(package, m
     main()
     assert main.init_options[0]["signal_handler_options"] == "no-native-signal-handler"
     assert main.signal_handlers == [(2, "python-interrupt"), (15, "python-interrupt")]
-    assert events == ["init", "spin", "destroy", "shutdown"]
+    assert events == expected_cleanup(module)
