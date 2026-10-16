@@ -515,13 +515,19 @@ class STM32BridgeV3(Node):
         ):
             self.core.require_rearm(REARM_FIRMWARE_REJECT)
             self._release(f"firmware rejected command: {status.last_reject_reason}")
-        self.chassis_status_pub.publish(UInt32(data=status.error_flags))
-        battery = BatteryState()
-        battery.header.stamp = receive_stamp
-        battery.voltage, battery.present = status.battery_voltage, status.battery_voltage > 1.0
-        self.battery_pub.publish(battery)
-        self.left_current_pub.publish(Float32(data=sum(status.motor_current_a[:2])))
-        self.right_current_pub.publish(Float32(data=sum(status.motor_current_a[2:])))
+        # Compatibility topics are volatile and not part of the control path.
+        # Avoid constructing and serializing unused copies on the UART callback.
+        if self.chassis_status_pub.get_subscription_count():
+            self.chassis_status_pub.publish(UInt32(data=status.error_flags))
+        if self.battery_pub.get_subscription_count():
+            battery = BatteryState()
+            battery.header.stamp = receive_stamp
+            battery.voltage, battery.present = status.battery_voltage, status.battery_voltage > 1.0
+            self.battery_pub.publish(battery)
+        if self.left_current_pub.get_subscription_count():
+            self.left_current_pub.publish(Float32(data=sum(status.motor_current_a[:2])))
+        if self.right_current_pub.get_subscription_count():
+            self.right_current_pub.publish(Float32(data=sum(status.motor_current_a[2:])))
         self._publish_chassis_states(status)
 
     def _publish_imu(self, imu, received_at: float) -> None:

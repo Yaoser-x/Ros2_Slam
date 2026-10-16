@@ -483,6 +483,12 @@ def bridge_timer_adapter():
         def __init__(self):
             self.header = SimpleNamespace()
 
+    class WheelObservation:
+        SCHEMA_VERSION = 1
+
+        def __init__(self):
+            self.header = SimpleNamespace()
+
     clock = Clock()
     classes = adapter_classes(
         Path(__file__).resolve().parents[1] / "stm32_robot_bridge/bridge_node_v3.py",
@@ -497,6 +503,10 @@ def bridge_timer_adapter():
         HostMotionCommand=object,
         QoSProfile=object,
         ChassisLinkState=LinkState,
+        WheelObservation=WheelObservation,
+        UInt32=lambda **kwargs: SimpleNamespace(**kwargs),
+        Float32=lambda **kwargs: SimpleNamespace(**kwargs),
+        BatteryState=lambda: SimpleNamespace(header=SimpleNamespace()),
         CMD_GET_INFO=CMD_GET_INFO,
         CMD_HELLO=CMD_HELLO,
         CMD_SET_VELOCITY=CMD_SET_VELOCITY,
@@ -995,3 +1005,21 @@ def test_repeated_fault_disables_keep_wire_actions_without_repeating_expensive_l
     clock.value += 1.0
     node._release("firmware ESTOP/fault-stop")
     assert len(warnings) == 2
+
+
+@pytest.mark.parametrize("subscribers", [0, 1])
+def test_unused_compatibility_topics_do_not_delay_wheel_and_control_state(subscribers):
+    node, clock = ready_timer_adapter()
+    observations, states, legacy = [], [], []
+    node.base_frame_id = "base_link"
+    node._receive_stamp = lambda _received_at: None
+    node.wheel_observation_pub = SimpleNamespace(publish=observations.append)
+    node._publish_chassis_states = states.append
+    for name in ("chassis_status_pub", "battery_pub", "left_current_pub", "right_current_pub"):
+        setattr(node, name, SimpleNamespace(
+            get_subscription_count=lambda: subscribers, publish=legacy.append,
+        ))
+    sample = status(sequence=2, received=1, applied=1)
+    type(node)._publish_status(node, sample, StatusDisposition.NEW, clock.value)
+    assert len(observations) == 1 and states == [sample]
+    assert len(legacy) == 4 * subscribers
