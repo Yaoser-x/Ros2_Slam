@@ -2,7 +2,7 @@ schema_version: 1
 release: v0.6.0-rc2
 platform_api_version: 5
 upper_architecture_baseline_commit: 2f16c8b9127a9534bade4fe9f3abb33643b4bd0b
-firmware_candidate_commit: 837cd9896636224b2a7aa40a9092b6fba3a7ccdd
+firmware_candidate_commit: cf6cbde82e4750d848c9b2745f2dba4ba3ed40c3
 firmware_candidate_tag: null
 software_gates:
   ros_ci: verification/reports/software/ros-ci-v0.6.0-rc2.yaml

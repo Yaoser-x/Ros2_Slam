@@ -10,7 +10,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 RELEASE = "v0.6.0-rc2"
 PLATFORM_API = 5
-FIRMWARE = "837cd9896636224b2a7aa40a9092b6fba3a7ccdd"
+FIRMWARE = "cf6cbde82e4750d848c9b2745f2dba4ba3ed40c3"
 
 
 def main() -> int:
