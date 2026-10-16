@@ -39,10 +39,14 @@ class SerialTransportSupervisor:
         retry_sec: float = 2.0,
         inbound_capacity: int = 256,
         outbound_capacity: int = 32,
+        coalesce_inbound_commands: tuple[int, ...] = (),
     ) -> None:
         self.serial_module, self.port, self.baudrate = serial_module, str(port), int(baudrate)
         self.retry_sec = float(retry_sec)
         self.events: queue.Queue[TransportEvent] = queue.Queue(maxsize=inbound_capacity)
+        self._coalesce_inbound_commands = frozenset(coalesce_inbound_commands)
+        self._latest_observations: dict[int, TransportEvent] = {}
+        self._inbound_lock = threading.Lock()
         self._outbound_capacity = int(outbound_capacity)
         self._outbound: list[OutboundFrame] = []
         self._condition = threading.Condition()
@@ -119,23 +123,39 @@ class SerialTransportSupervisor:
 
     def drain_events(self, limit: int = 64) -> list[TransportEvent]:
         result = []
-        for _ in range(max(int(limit), 0)):
-            try:
-                result.append(self.events.get_nowait())
-            except queue.Empty:
-                break
+        with self._inbound_lock:
+            for _ in range(max(int(limit), 0)):
+                try:
+                    result.append(self.events.get_nowait())
+                except queue.Empty:
+                    if not self._latest_observations:
+                        break
+                    cmd = next(iter(self._latest_observations))
+                    result.append(self._latest_observations.pop(cmd))
         return result
 
+    def clear_pending_observations(self) -> None:
+        with self._inbound_lock:
+            self._latest_observations.clear()
+
     def _emit(self, event: TransportEvent) -> None:
-        try:
-            self.events.put_nowait(event)
-        except queue.Full:
-            self.stats.rx_queue_drops += 1
+        with self._inbound_lock:
+            if event.kind in ("connected", "disconnected"):
+                self._latest_observations.clear()
+            if event.kind == "frame" and event.cmd in self._coalesce_inbound_commands:
+                if event.cmd in self._latest_observations:
+                    self.stats.rx_coalesced_frames += 1
+                self._latest_observations[event.cmd] = event
+                return
             try:
-                self.events.get_nowait()
                 self.events.put_nowait(event)
-            except queue.Empty:
-                pass
+            except queue.Full:
+                self.stats.rx_queue_drops += 1
+                try:
+                    self.events.get_nowait()
+                    self.events.put_nowait(event)
+                except queue.Empty:
+                    pass
 
     def _run(self) -> None:
         while not self._stop:

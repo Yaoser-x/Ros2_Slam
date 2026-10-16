@@ -23,6 +23,7 @@ class TransportStats:
     rx_resync_bytes: int = 0
     serial_reconnects: int = 0
     rx_queue_drops: int = 0
+    rx_coalesced_frames: int = 0
     tx_queue_drops: int = 0
 
 

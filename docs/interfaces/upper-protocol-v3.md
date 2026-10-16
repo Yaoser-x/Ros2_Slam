@@ -61,6 +61,8 @@ ACK flags：`0x01 session_valid`、`0x02 received`、`0x04 applied`、`0x08 dupl
 
 固件必须在 200 ms 内因 UPPER 命令丢失进入安全停止。上位机每 50 ms keepalive，150 ms 内未收到 command ACK 或命令更新时主动 release；250 ms 未收到 STATUS 时 release 并要求新的 disable→enable 边沿。
 
+Bridge 的串口线程保留每一帧 STATUS/ACK 的处理顺序，优先交给控制回调；高频 IMU 观测在尚未消费时保留最新样本，避免旧观测积压延迟安全状态。`serial_rx_coalesced_frames` 单独记录被新样本替代的帧数，与队列溢出丢帧计数区分。连接或 wire session 变化时丢弃待处理的旧 IMU 观测。控制回调仍受每次最多四个事件、约 4 ms 的批次预算约束；此策略不放宽命令、ACK 或状态超时。
+
 ## HELLO 与能力门
 
 GET_INFO payload 仅为版本字节。固件响应 HELLO：

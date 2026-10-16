@@ -169,7 +169,12 @@ class STM32BridgeV3(Node):
         if serial is None:
             raise RuntimeError("python3-serial is required")
         self.transport = SerialTransportSupervisor(
-            serial, str(self.get_parameter("port").value), int(self.get_parameter("baudrate").value)
+            serial,
+            str(self.get_parameter("port").value),
+            int(self.get_parameter("baudrate").value),
+            # IMU is a sampled observation: keep the newest pending sample while
+            # preserving every STATUS/ACK and safety transition in FIFO order.
+            coalesce_inbound_commands=(CMD_IMU_STATUS,),
         )
 
         self.wheel_observation_pub = self.create_publisher(
@@ -349,6 +354,7 @@ class STM32BridgeV3(Node):
         self._begin_wire_session(request_info=True)
 
     def _begin_wire_session(self, *, request_info: bool) -> None:
+        self.transport.clear_pending_observations()
         session = secrets.randbits(64) or 1
         self.core.on_connected(session)
         self.command_stream = CommandStream(
@@ -698,6 +704,7 @@ class STM32BridgeV3(Node):
             "serial_tx_frames": self.transport.stats.tx_frames,
             "serial_crc_errors": self.transport.stats.rx_crc_errors,
             "serial_rx_queue_drops": self.transport.stats.rx_queue_drops,
+            "serial_rx_coalesced_frames": self.transport.stats.rx_coalesced_frames,
             "serial_tx_queue_drops": self.transport.stats.tx_queue_drops,
         }
         status.values = [KeyValue(key=str(k), value=str(v)) for k, v in values.items()]
