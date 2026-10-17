@@ -28,3 +28,9 @@ qualified together. `BASE_WHEEL_TRACK_WIDTH`, `BASE_ODOM_ANGULAR_SCALE` and
 `BASE_ODOM_ANGULAR_SIGN` are rejected; their replacement is canonical calibration.
 `base_only` reuses the provider, compatibility gate, command mux, state estimation,
 supervision and chassis-operation chain without lidar, SLAM or Nav2.
+
+Shared geometry is a measured value with two runtime consumers, not permission for
+either consumer to silently rewrite the other. Firmware ParameterManagement owns
+firmware application/persistence. After measured firmware values and CRC are read
+back, update the upper calibration replica and compile a new manifest. The exact
+ordering and state owners are defined in [runtime ownership](runtime-ownership.md).

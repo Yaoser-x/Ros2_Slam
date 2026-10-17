@@ -17,6 +17,8 @@ Platform API 5 把 Host 意图、传输事实、物理控制和状态估计分�
 Bridge 不计算 odometry，不发布 TF，不执行 Host 子来源仲裁，也不作 Nav2 决策。
 上位机 release 只撤回 Host 候选；整车是否物理停止必须由新鲜固件 STATUS 证明。
 
+完整状态所有权与几何同步流程见 [运行职责契约](../contracts/runtime-ownership.md)。
+
 ## 数据与控制链
 
 ```text
@@ -64,11 +66,12 @@ capability、硬件 revision、参数 CRC、轮布局和新鲜观测。真实平
 正式 odom 和导航均 fail-closed；Fake Base 通过显式 `simulated` 身份进入 simulation
 状态。
 
-兼容配置中的候选固件仍为 `bc472cc874e930aaed6eb8e7de73b41a2563dd85`，tested commit
-与正式配对尚未锁定。2026-10-15 的开发固件串口实测已读到 hardware revision
-`0x00020000` 和参数 CRC `0x0D663E2A`；这些观测不自动修改正式兼容配置。
-当前开发构建的 HELLO 身份仍为零，BUILD_IDENTITY capability 缺失，兼容门应保持关闭。
-`release_compatible` 仍为 `false`，标定和落地车辆验收尚未完成。
+候选身份以 `compatibility/firmware.yaml` 为准。2026-10-17 的实测 HELLO 为
+`cf6cbde82e4750d848c9b2745f2dba4ba3ed40c3`、capabilities `0x1f`、hardware revision
+`0x00020000`、参数 CRC `0x0D663E2A`。干净身份及急停静止 ROS 链路已观察通过，
+不再将当前身份描述为零；完整运动、标定和车辆验收仍未完成。
+`release_compatible` 保持 `false`，正式 odom/导航资格不能从静止结果推导。
+各版本的证据级别及剩余任务见 [验收路线](acceptance-roadmap.md)。
 
 真实 UART 阶段补充了两个此前源码／fake-base 回归未覆盖的问题：完整控制帧被 DMA
 覆盖保护误判丢弃，以及 Bridge 安装后缺少 Python 路径环境 hook。下位机接收契约见
