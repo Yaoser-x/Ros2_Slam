@@ -40,6 +40,12 @@ def test_version_guard_rejects_stale_calibration_identity(tmp_path, monkeypatch,
     spec.loader.exec_module(module)
     monkeypatch.setattr(module, "ROOT", tmp_path)
     assert module.main() == 0
+    readme_path = tmp_path / "README.md"
+    current_readme = readme_path.read_text(encoding="utf-8")
+    readme_path.write_text(current_readme.replace("`cf6cbde`", "`ba0f430`"), encoding="utf-8")
+    with pytest.raises(AssertionError):
+        module.main()
+    readme_path.write_text(current_readme, encoding="utf-8")
     path = tmp_path / "src/robot_config/config/calibration/robot_001/chassis_v1.yaml"
     calibration = yaml.safe_load(path.read_text(encoding="utf-8"))
     calibration["calibration_bundle"]["identity"][key] = value

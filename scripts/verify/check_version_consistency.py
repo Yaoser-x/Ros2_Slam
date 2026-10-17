@@ -50,7 +50,8 @@ def main() -> int:
         )
     assert cross_repo["firmware_candidate_commit"] == FIRMWARE
     assert FIRMWARE in ci
-    assert "Platform API 5" in readme and "ba0f430" in readme
+    assert "Platform API 5" in readme
+    assert f"固定下位机候选 `{FIRMWARE[:7]}`" in readme
     assert not re.search(r"Platform API 4\s*/\s*Upper Protocol v3", readme)
     return 0
 

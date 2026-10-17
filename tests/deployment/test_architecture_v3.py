@@ -1,10 +1,59 @@
 from pathlib import Path
+import ast
 import re
 
+import pytest
 import yaml
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def imports_historical_imu(code):
+    for node in ast.walk(ast.parse(code)):
+        if isinstance(node, ast.Import):
+            if any(alias.name.split(".")[-1] == "imu_converter" for alias in node.names):
+                return True
+        elif isinstance(node, ast.ImportFrom):
+            if (node.module or "").split(".")[-1] == "imu_converter":
+                return True
+            if node.module in (None, "stm32_robot_bridge") and any(
+                alias.name == "imu_converter" for alias in node.names
+            ):
+                return True
+    return False
+
+
+@pytest.mark.parametrize("code", [
+    "import stm32_robot_bridge.imu_converter as legacy",
+    "from stm32_robot_bridge.imu_converter import classify_imu_quality",
+    "from .imu_converter import ImuClockSynchronizer",
+    "from . import imu_converter as legacy",
+    "from stm32_robot_bridge import imu_converter",
+])
+def test_historical_estimator_import_guard_catches_aliases(code):
+    assert imports_historical_imu(code)
+
+
+def test_v3_runtime_does_not_import_historical_estimator():
+    directory = ROOT / "src/stm32_robot_bridge/stm32_robot_bridge"
+    for path in directory.glob("*.py"):
+        if path.name != "imu_converter.py":
+            assert not imports_historical_imu(path.read_text(encoding="utf-8")), path
+
+
+def test_formal_odometry_is_only_dynamic_tf_owner():
+    owners = []
+    for path in (ROOT / "src").glob("*/**/*.py"):
+        if "/test/" in path.as_posix() or path.name.startswith("test_"):
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Call) and (
+                isinstance(node.func, ast.Name) and node.func.id == "TransformBroadcaster"
+                or isinstance(node.func, ast.Attribute) and node.func.attr == "TransformBroadcaster"
+            ):
+                owners.append(path.relative_to(ROOT).as_posix())
+    assert owners == ["src/robot_state_estimation/robot_state_estimation/formal_odometry_node.py"]
 
 
 def test_robot_control_is_only_host_motion_command_publisher():
