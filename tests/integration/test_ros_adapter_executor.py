@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]
         "compatibility_process_loss",
         "operations",
         "estimation",
+        "imu_field_quality",
     ],
 )
 def test_adapters_in_single_threaded_ros_executor(case):

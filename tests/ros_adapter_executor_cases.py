@@ -12,7 +12,7 @@ from nav_msgs.msg import Odometry
 from rclpy.action import ActionClient, ActionServer, CancelResponse
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile
+from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from rclpy.task import Future
 from robot_interfaces.action import ChassisOperation
 from robot_interfaces.msg import (
@@ -21,6 +21,7 @@ from robot_interfaces.msg import (
     FirmwareInfo,
     HostControlState,
     HostMotionCommand,
+    ImuObservation,
     MotionSupervisionState,
     PlatformCompatibilityState,
     WheelObservation,
@@ -33,6 +34,7 @@ from robot_control.cmd_vel_mux import CmdVelMuxNode
 from robot_config.compatibility_node import PlatformCompatibilityNode
 from robot_navigation_guard.navigation_guard_node import NavigationGuardNode
 from robot_state_estimation.formal_odometry_node import FormalOdometryNode
+from robot_state_estimation.imu_adapter_node import ImuAdapterNode
 from robot_supervision.motion_supervisor_node import MotionSupervisorNode
 from robot_verification.fake_base_node import FakeBaseNode
 
@@ -281,10 +283,13 @@ def rearm_late_subscriber(executor, nodes):
     early_timer = fixture.create_timer(0.02, publish_unready)
     for node in nodes:
         executor.add_node(node)
-    spin_until(executor, lambda: bool(commands)
-               and mux.last_wire_session_id == 0xFA4E000000000001
-               and commands[-1].command_epoch == mux.command_epoch)
-    first_index = len(commands)-1
+    spin_until(
+        executor,
+        lambda: bool(commands)
+        and mux.last_wire_session_id == 0xFA4E000000000001
+        and commands[-1].command_epoch == mux.command_epoch,
+    )
+    first_index = len(commands) - 1
     first = commands[first_index]
     assert not first.enable and first.command_epoch
     spin_until(
@@ -456,6 +461,55 @@ def operations(executor, nodes):
     assert result.result().result.status == ChassisOperation.Result.RESULT_APPLIED
     fixture.destroy_timer(timer)
     client.destroy()
+
+
+def imu_field_quality(executor, nodes):
+    adapter, fixture = ImuAdapterNode(), Node("fixture")
+    nodes.extend([adapter, fixture])
+    publisher = fixture.create_publisher(ImuObservation, "imu/observation", qos_profile_sensor_data)
+    observations = []
+    fixture.create_subscription(
+        Imu, "imu/data", lambda msg: observations.append(msg), qos_profile_sensor_data
+    )
+    for node in nodes:
+        executor.add_node(node)
+    spin_until(executor, lambda: publisher.get_subscription_count() == 1)
+    spin_until(executor, lambda: adapter.publisher.get_subscription_count() == 1)
+
+    def sample(sequence, quality=8, status=7):
+        message = ImuObservation()
+        message.schema_version = message.SCHEMA_VERSION
+        message.transport_session_id, message.sample_sequence = 7, sequence
+        message.header.stamp = fixture.get_clock().now().to_msg()
+        message.mcu_sample_time_ms, message.sensor_time = sequence * 10, 0
+        message.quality_flags, message.status_flags = quality, status
+        message.angular_velocity_dps = [0.0, 0.0, 90.0]
+        message.acceleration_g = [0.0, 0.0, 1.0]
+        message.orientation.w = 1.0
+        before = len(observations)
+        publisher.publish(message)
+        spin_until(executor, lambda: len(observations) == before + 1)
+        return observations[-1], message
+
+    # Real v3 timestamp-invalid frames carry both quality=8 and status=7.
+    for sequence in (10, 11):
+        converted, message = sample(sequence)
+        assert converted.angular_velocity_covariance[0] > 0
+        assert abs(converted.angular_velocity.z - 1.5707963267948966) < 1e-9
+        assert converted.linear_acceleration_covariance[0] > 0
+        assert abs(converted.linear_acceleration.z - 9.80665) < 1e-9
+    assert adapter.timestamp_invalid_count == 2
+    before = len(observations)
+    publisher.publish(message)
+    spin_until(executor, lambda: adapter.rejected_count == 1)
+    assert len(observations) == before
+    converted, _ = sample(12, quality=9)
+    assert converted.angular_velocity_covariance[0] == -1
+    assert converted.linear_acceleration_covariance[0] > 0
+    for sequence, quality, status in ((13, 264, 7), (14, 8, 0), (15, 0, 5)):
+        converted, _ = sample(sequence, quality, status)
+        assert converted.angular_velocity_covariance[0] == -1
+        assert converted.linear_acceleration_covariance[0] == -1
 
 
 def estimation(executor, nodes):

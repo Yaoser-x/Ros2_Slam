@@ -304,3 +304,32 @@ def test_imu_field_quality_degrades_orientation_independently():
     assert validity.gyro_valid
     assert validity.accel_valid
     assert not validity.orientation_valid
+
+
+@pytest.mark.parametrize(
+    "quality_flags,status_flags,expected",
+    [
+        (1 << 3, 7, (True, True, True, False)),
+        (1 << 0, 5, (False, True, True, True)),
+        (1 << 1, 5, (True, False, True, True)),
+        (1 << 2, 5, (True, True, False, True)),
+        ((1 << 0) | (1 << 3), 7, (False, True, True, False)),
+        (0x0F, 7, (False, False, False, False)),
+        (1 << 8, 1, (False, False, False, False)),
+        ((1 << 8) | (1 << 3), 7, (False, False, False, False)),
+        (1 << 3, 0, (False, False, False, False)),
+        (0, 5, (False, False, False, False)),
+        (1 << 7, 5, (False, False, False, False)),
+        (1 << 12, 5, (False, False, False, False)),
+    ],
+)
+def test_imu_summary_error_preserves_field_validity(quality_flags, status_flags, expected):
+    # The real v3 encoder also sets the summary ERROR bit for timestamp-only
+    # invalidity. It must not discard gyro/accel when their own fields are valid.
+    validity = classify_quality(quality_flags, status_flags)
+    assert (
+        validity.gyro_valid,
+        validity.accel_valid,
+        validity.orientation_valid,
+        validity.timestamp_valid,
+    ) == expected

@@ -106,6 +106,8 @@ v0.6.0-rc2 要求 capabilities `0x1f`：session ACK、STATUS 采样时间、IMU 
 
 quality flags 按字段解释：bit0 gyro invalid、bit1 accel invalid、bit2 orientation invalid、bit3 timestamp invalid、bit4 gyro warning、bit5 accel warning、bit6 orientation warning、bit7 timestamp warning、bit8 fatal、bit9 sensor reset。gyro-only 模式不因 quaternion 无效丢弃有效 gyro；warning 数据继续发布但提高协方差。status flags 为 online `0x01`、calibrated `0x02`、error `0x04`、sensor-time-valid `0x08`。
 
+`error` 是字段错误的汇总：例如仅 sensor time 无效时，下位机同时上报 `quality_flags=0x08` 与 `status_flags=0x07`，此时 gyro、accel 仍按各自质量位使用，时间改用接收时间。offline 或 fatal 使全部字段无效；有 `error` 却没有任何字段 invalid 明细时，也保守判为全部无效。样本保序仍依据 sample count，不因时间字段持续为零而丢弃新样本。
+
 ## 下位机验收条件
 
 合入兼容矩阵前，下位机必须提供固定 commit，并通过：黄金帧、重复/乱序/回绕/session 重放、NaN/Inf、fault/ESTOP、200 ms watchdog、STATUS/IMU 时间戳回绕和重启、CRC/短帧/粘包，以及树莓派 UART HIL。只有机器报告为 PASS 后才允许将 `compatibility/firmware.yaml` 的 `release_compatible` 改为 true。

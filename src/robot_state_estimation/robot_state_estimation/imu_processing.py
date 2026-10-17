@@ -31,9 +31,20 @@ class ImuFieldValidity:
 
 def classify_quality(quality_flags: int, status_flags: int) -> ImuFieldValidity:
     flags = int(quality_flags)
+    field_invalid_mask = (
+        IMU_QUALITY_GYRO_INVALID
+        | IMU_QUALITY_ACCEL_INVALID
+        | IMU_QUALITY_ORIENTATION_INVALID
+        | IMU_QUALITY_TIMESTAMP_INVALID
+    )
+    # ERROR summarizes any invalid field in Upper v3, including sensor time.
+    # Keep other fields usable; an error without field detail remains invalid.
+    unexplained_error = bool(int(status_flags) & IMU_FLAG_ERROR) and not bool(
+        flags & field_invalid_mask
+    )
     base_valid = (
         bool(int(status_flags) & IMU_FLAG_ONLINE)
-        and not bool(int(status_flags) & IMU_FLAG_ERROR)
+        and not unexplained_error
         and not bool(flags & IMU_QUALITY_FATAL)
     )
     warning_mask = (
