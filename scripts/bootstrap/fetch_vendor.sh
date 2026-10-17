@@ -62,6 +62,7 @@ patch_present_by_markers() {
 if [ -d vendor/ydlidar-sdk ]; then
     apply_patch_once vendor/ydlidar-sdk ../../deps/patches/ydlidar-sdk-modern-cmake.patch
     apply_patch_once vendor/ydlidar-sdk ../../deps/patches/ydlidar-sdk-fix-install-export.patch
+    apply_patch_once vendor/ydlidar-sdk ../../deps/patches/ydlidar-sdk-scan-framing.patch
     touch vendor/ydlidar-sdk/COLCON_IGNORE
 fi
 

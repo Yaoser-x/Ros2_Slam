@@ -210,3 +210,41 @@ class TestScanNormalizer:
         valid_count = sum(1 for r in out.ranges if r != math.inf)
         assert valid_count > 0
         assert valid_count < 360
+
+
+@pytest.mark.parametrize(
+    "scan_time,time_increment",
+    [
+        (0.0, 0.0),
+        (-0.1, 0.0),
+        (math.nan, 0.0),
+        (math.inf, 0.0),
+        (0.1, -0.001),
+        (0.1, math.nan),
+        (0.1, math.inf),
+        (0.1, 0.2),
+    ],
+)
+def test_invalid_timing_is_not_forwarded(scan_time, time_increment):
+    node = make_normalizer()
+    scan = make_laserscan([1.0] * 425)
+    scan.scan_time = scan_time
+    scan.time_increment = time_increment
+
+    node.on_scan(scan)
+
+    node.pub.publish.assert_not_called()
+    assert node.message_count == 0
+
+
+def test_valid_scan_recovers_after_zero_period_startup_frame():
+    node = make_normalizer()
+    startup = make_laserscan([1.0] * 425)
+    startup.scan_time = 0.0
+    node.on_scan(startup)
+    valid = make_laserscan([1.0] * 425)
+    node.on_scan(valid)
+
+    node.pub.publish.assert_called_once()
+    assert node.pub.publish.call_args[0][0].header is valid.header
+    assert node.message_count == 1

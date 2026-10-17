@@ -1,0 +1,61 @@
+--- a/src/YDlidarDriver.cpp
++++ b/src/YDlidarDriver.cpp
+@@ -550,10 +550,13 @@
+-
++
+   m_BlockRevSize = 0;
+-
++
+   while ((dt = getms() - st) <= timeout)
+   {
++    // Re-scan only the incomplete suffix after each read.
++    recvPos = 0;
++    trunPos = 0;
+     std::vector<uint8_t> d = readAll(timeout - dt);
+     if (d.empty())
+       return ret;
+     m_data.insert(m_data.end(), d.begin(), d.end());
+     size_t size = m_data.size();
+@@ -730,26 +733,27 @@
+         {
+           break; //跳出循环等待足够数据
+         }
+       }
+     }
++
++    if (trunPos) // 截断数据
++    {
++      if (trunPos < m_data.size())
++        m_data = std::vector<uint8_t>(m_data.begin() + trunPos, m_data.end());
++      else
++        m_data.clear();
++    }
++    else if (m_data.size() > SDK_SIZE1K) //数据量过大时清空
++    {
++      warn("Current invalid data %u too big, has cleared", m_data.size());
++      m_data.clear();
++    }
+     if (IS_OK(ret))
+       break;
+   }
+-
++
+-  if (trunPos) // 截断数据
+-  {
+-    if (trunPos < m_data.size())
+-      m_data = std::vector<uint8_t>(m_data.begin() + trunPos, m_data.end());
+-    else
+-      m_data.clear();
+-  }
+-  else if (m_data.size() > SDK_SIZE1K) //数据量过大时清空
+-  {
+-    warn("Current invalid data %u too big, has cleared", m_data.size());
+-    m_data.clear();
+-  }
+-
++
+   return ret;
+ }
+-
++
+ result_t YDlidarDriver::grabScanData(

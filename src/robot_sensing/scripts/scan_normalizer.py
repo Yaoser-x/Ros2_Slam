@@ -54,6 +54,15 @@ class ScanNormalizer(Node):
         return math.isfinite(value) and range_min <= value <= range_max
 
     def on_scan(self, msg: LaserScan) -> None:
+        if not (
+            math.isfinite(msg.scan_time)
+            and msg.scan_time > 0.0
+            and math.isfinite(msg.time_increment)
+            and 0.0 <= msg.time_increment <= msg.scan_time
+        ):
+            self.get_logger().warn('Skipping scan: invalid scan_time or time_increment')
+            return
+
         out = LaserScan()
         out.header = msg.header
         out.angle_min = self.angle_min

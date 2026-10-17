@@ -27,10 +27,18 @@ jobs:
       - name: Configure git safe directory
         run: git config --global --add safe.directory /__w/Ros2_Slam/Ros2_Slam
 
+      - name: Checkout locked lidar parser source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: YDLIDAR/YDLidar-SDK
+          ref: 01cdda4f2b36dff2a706d0535c64228d863c7411
+          path: build/lidar-sdk
+          persist-credentials: false
+
       - name: Install system deps
         run: |
           apt-get update
-          apt-get install -y python3-pip python3-serial python3-jsonschema shellcheck
+          apt-get install -y python3-pip python3-serial python3-jsonschema shellcheck g++
           pip3 install \
             "pytest<8" pytest-cov \
             black==24.10.0 ruff==0.8.6 mypy==1.14.1 yamllint==1.35.1
@@ -75,6 +83,13 @@ jobs:
           ctest --test-dir build/firmware-host --output-on-failure
           test -z "$(git -C firmware-contract status --porcelain --untracked-files=all)"
 
+      - name: Locked lidar parser regression
+        run: |
+          git -C build/lidar-sdk apply --ignore-space-change --ignore-whitespace \
+            "$GITHUB_WORKSPACE/deps/patches/ydlidar-sdk-scan-framing.patch"
+          python3 scripts/verify/check_lidar_parser.py \
+            build/lidar-sdk/src/YDlidarDriver.cpp build/lidar-parser-evidence
+
       - name: Linux software evidence with coverage
         run: |
           . /opt/ros/humble/setup.sh
@@ -102,5 +117,6 @@ jobs:
           if-no-files-found: warn
           path: |
             build/software-evidence/
+            build/lidar-parser-evidence/
             coverage.json
             coverage.xml

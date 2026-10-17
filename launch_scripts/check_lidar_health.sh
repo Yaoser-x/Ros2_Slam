@@ -151,6 +151,7 @@ fi
 
 echo -e "${YELLOW}采样 /scan 频率（${CHECK_SECONDS}s）...${NC}"
 python3 - "$CHECK_SECONDS" >"$HZ_LOG" 2>&1 <<'PY'
+import math
 import sys
 import time
 
@@ -168,20 +169,41 @@ state = {
     "first_t": None,
     "last_t": None,
     "len_hist": {},
+    "last_stamp_ns": None,
+    "scan_metadata_errors": 0,
+    "valid_range_count": 0,
 }
 
 def cb(msg):
-    t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+    t = time.monotonic()
     if state["first_t"] is None:
         state["first_t"] = t
     state["last_t"] = t
     state["count"] += 1
     n = len(msg.ranges)
     state["len_hist"][n] = state["len_hist"].get(n, 0) + 1
+    stamp = msg.header.stamp
+    stamp_ns = stamp.sec * 1_000_000_000 + stamp.nanosec
+    stamp_valid = stamp.sec >= 0 and 0 <= stamp.nanosec < 1_000_000_000
+    if state["last_stamp_ns"] is not None and stamp_ns <= state["last_stamp_ns"]:
+        stamp_valid = False
+    state["last_stamp_ns"] = stamp_ns
+    # X2 scans at multiple Hz. A nonfinite or >1s period is not a usable scan;
+    # zero time_increment is allowed when individual sample timing is unknown.
+    timing_valid = (
+        math.isfinite(msg.scan_time)
+        and math.isfinite(msg.time_increment)
+        and 0.0 < msg.scan_time <= 1.0
+        and 0.0 <= msg.time_increment <= msg.scan_time
+    )
+    state["scan_metadata_errors"] += int(not stamp_valid or not timing_valid)
+    state["valid_range_count"] += sum(
+        math.isfinite(value) and msg.range_min <= value <= msg.range_max for value in msg.ranges
+    )
 
 sub = node.create_subscription(LaserScan, "/scan", cb, qos_profile_sensor_data)
-start = time.time()
-while time.time() - start < duration:
+start = time.monotonic()
+while time.monotonic() - start < duration:
     rclpy.spin_once(node, timeout_sec=0.2)
 
 count = state["count"]
@@ -193,6 +215,8 @@ else:
 
 print(f"COUNT={count}")
 print(f"HZ={hz:.3f}")
+print(f"SCAN_METADATA_ERRORS={state['scan_metadata_errors']}")
+print(f"VALID_RANGE_COUNT={state['valid_range_count']}")
 print(f"UNIQUE_RANGE_SIZE={len(state['len_hist'])}")
 if state["len_hist"]:
     sizes = sorted(state["len_hist"])
@@ -225,6 +249,8 @@ if [ -z "$SCAN_FAIL_COUNT" ]; then
 fi
 SCAN_COUNT=$(awk -F= '/^COUNT=/{print $2}' "$HZ_LOG" 2>/dev/null | tail -n 1 | tr -d '[:space:]')
 AVG_SCAN_HZ=$(awk -F= '/^HZ=/{print $2}' "$HZ_LOG" 2>/dev/null | tail -n 1 | tr -d '[:space:]')
+SCAN_METADATA_ERRORS=$(awk -F= '/^SCAN_METADATA_ERRORS=/{print $2}' "$HZ_LOG" 2>/dev/null | tail -n 1 | tr -d '[:space:]')
+VALID_RANGE_COUNT=$(awk -F= '/^VALID_RANGE_COUNT=/{print $2}' "$HZ_LOG" 2>/dev/null | tail -n 1 | tr -d '[:space:]')
 UNIQUE_RANGE_SIZE=$(awk -F= '/^UNIQUE_RANGE_SIZE=/{print $2}' "$HZ_LOG" 2>/dev/null | tail -n 1 | tr -d '[:space:]')
 RANGE_SIZE_STATS=$(awk -F= '/^RANGE_SIZE_STATS=/{print $2}' "$HZ_LOG" 2>/dev/null | tail -n 1 | tr -d '[:space:]')
 RANGE_SIZE_MIN=$(awk -F= '/^RANGE_SIZE_MIN=/{print $2}' "$HZ_LOG" 2>/dev/null | tail -n 1 | tr -d '[:space:]')
@@ -238,6 +264,8 @@ echo "  日志文件: $DRIVER_LOG"
 echo "  频率文件: $HZ_LOG"
 echo "  CheckSum错误数: $CHECKSUM_COUNT"
 echo "  Failed to get scan次数: $SCAN_FAIL_COUNT"
+echo "  扫描时间字段错误数: ${SCAN_METADATA_ERRORS:-未获取到}"
+echo "  量程内有效距离数: ${VALID_RANGE_COUNT:-未获取到}"
 if [ -n "${SCAN_COUNT:-}" ]; then
     echo "  /scan消息数: ${SCAN_COUNT}"
 fi
@@ -263,6 +291,17 @@ if [ "$SCAN_FAIL_COUNT" -gt 0 ]; then
     echo "  1) 更换 USB 线，避免劣质延长线/HUB"
     echo "  2) 检查供电稳定性（雷达单独供电更稳）"
     echo "  3) 确认雷达型号与参数文件一致（当前默认 X2.yaml）"
+    exit 1
+fi
+
+if [ -z "${SCAN_METADATA_ERRORS:-}" ] || [ "$SCAN_METADATA_ERRORS" != "0" ]; then
+    echo -e "${RED}✗ 未通过: 扫描时间戳不递增、扫描周期异常，或未取得时间字段检查结果${NC}"
+    echo -e "${YELLOW}采样日志: $HZ_LOG${NC}"
+    exit 1
+fi
+
+if [ -z "${VALID_RANGE_COUNT:-}" ] || [ "$VALID_RANGE_COUNT" -eq 0 ]; then
+    echo -e "${RED}✗ 未通过: 未取得量程内有效距离${NC}"
     exit 1
 fi
 
