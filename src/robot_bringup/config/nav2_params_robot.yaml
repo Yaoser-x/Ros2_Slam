@@ -230,7 +230,7 @@ map_saver:
   ros__parameters:
     use_sim_time: false
     save_map_timeout: 5.0
-    free_thresh_default: 0.25
+    free_thresh_default: 0.196  # Keep PGM gray 205 unknown after reload.
     occupied_thresh_default: 0.65
     map_subscribe_transient_local: true
 

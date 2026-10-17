@@ -64,6 +64,7 @@ for TRY in 1 2 3; do
     ros2 run nav2_map_server map_saver_cli \
         -t /map \
         -f "$MAP_BASENAME" \
+        --free 0.196 --occ 0.65 \
         --ros-args \
         -p save_map_timeout:=15.0 \
         -p map_subscribe_transient_local:=true
