@@ -18,6 +18,8 @@ def make_node():
         GoalGuard=GoalGuard,
         GoalStatus=NS(STATUS_SUCCEEDED=4, STATUS_CANCELED=5, STATUS_ABORTED=6),
         NavigateToPose=NS(Result=lambda: NS(), Goal=lambda: NS(pose=None)),
+        HostMotionCommand=NS(HOST_SUBSOURCE_NONE=0, HOST_SUBSOURCE_NAV=3),
+        HostControlState=NS(STATE_WAIT_FRESH_HOST_INTENT=3, STATE_HOST_ACTIVE=4),
         NavigationGuardState=NS(
             REASON_LINK=1,
             REASON_FIRMWARE=2,
@@ -66,6 +68,74 @@ def make_node():
     goal.canceled = lambda: setattr(goal, "terminal", "cancel")
     goal.succeed = lambda: setattr(goal, "terminal", "success")
     return node, clock, send, result, handle, goal
+
+
+@pytest.mark.parametrize("source", [1, 2, 4, 255])
+def test_host_takeover_cancels_navigation_and_neutral_does_not_resume_old_goal(source):
+    node, clock, send, result, handle, goal = make_node()
+    coroutine = node._execute(goal)
+    coroutine.send(None)
+    send.set_result(handle)
+    node._cancel_tick()
+
+    node._on_host(NS(control_state=4, rearm_required=False, selected_host_subsource=source))
+    assert node.reason_flags == 16
+    assert node.guard.cancel_pending and not node.guard.safe
+    node._cancel_tick()
+    assert handle.cancel_count == 1
+
+    node._on_host(NS(control_state=3, rearm_required=True, selected_host_subsource=0))
+    node._cancel_tick()
+    assert node.guard.active_uuid and not node.guard.ready
+    result.set_result(NS(status=5, result=NS()))
+    node._cancel_tick()
+    with pytest.raises(StopIteration):
+        coroutine.send(None)
+    assert goal.terminal == "abort"
+    assert node.guard.ready
+    assert not node.guard.observe_goal(bytes(goal.goal_id.uuid).hex())
+    assert node.guard.observe_goal("fresh-explicit-goal")
+
+
+@pytest.mark.parametrize("source", [2, 3, 4, 5, 255])
+def test_physical_control_takeover_revokes_navigation(source):
+    node, clock, send, result, handle, goal = make_node()
+    coroutine = node._execute(goal)
+    coroutine.send(None)
+    send.set_result(handle)
+    node._cancel_tick()
+    node._on_firmware(
+        NS(
+            wire_session_id=7,
+            estop_active=False,
+            fault_stop_active=False,
+            firmware_control_source=source,
+        )
+    )
+    assert node.reason_flags == 2
+    node._cancel_tick()
+    assert handle.cancel_count == 1 and node.guard.cancel_pending
+    result.set_result(NS(status=5, result=NS()))
+    node._cancel_tick()
+    with pytest.raises(StopIteration):
+        coroutine.send(None)
+    assert goal.terminal == "abort"
+
+
+@pytest.mark.parametrize("firmware_source", [0, 1])
+@pytest.mark.parametrize("host_source", [0, 3])
+def test_idle_and_navigation_sources_remain_admissible(firmware_source, host_source):
+    node, *_ = make_node()
+    node._on_firmware(
+        NS(
+            wire_session_id=7,
+            estop_active=False,
+            fault_stop_active=False,
+            firmware_control_source=firmware_source,
+        )
+    )
+    node._on_host(NS(control_state=4, rearm_required=False, selected_host_subsource=host_source))
+    assert node.guard.ready and node.reason_flags == 0
 
 
 def test_pending_navigation_yields_native_future_and_releases_only_after_backend_terminal():

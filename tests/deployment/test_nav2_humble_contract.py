@@ -123,6 +123,12 @@ remappings = context.launch_configurations['ros_remaps']
 assert ('navigate_to_pose', 'nav2/navigate_to_pose') in remappings
 assert ('navigate_through_poses', 'nav2/navigate_through_poses') in remappings
 assert ('goal_pose', 'nav2/goal_pose') in remappings
+for action_name in ('navigate_to_pose', 'navigate_through_poses'):
+    for endpoint in ('send_goal', 'get_result', 'cancel_goal', 'feedback', 'status'):
+        assert (
+            f'{action_name}/_action/{endpoint}',
+            f'nav2/{action_name}/_action/{endpoint}',
+        ) in remappings
 include = next(action for action in group.get_sub_entities() if isinstance(action, IncludeLaunchDescription))
 arguments = dict(include.launch_arguments)
 assert 'default_bt_xml_filename' not in arguments

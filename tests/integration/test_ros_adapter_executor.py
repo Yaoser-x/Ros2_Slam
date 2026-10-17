@@ -17,6 +17,8 @@ ROOT = Path(__file__).resolve().parents[2]
     [
         "navigation",
         "navigation_cancel_pending",
+        "navigation_host_takeover",
+        "navigation_firmware_takeover",
         "navigation_pose",
         "rearm_late_subscriber",
         "compatibility_process_loss",

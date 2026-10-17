@@ -30,6 +30,9 @@ cancel Future；响应完成后才按间隔重试。响应永久失联时保持�
 Guard 分别检查 link、firmware、supervision、compatibility 和 Host 状态的单调时钟
 lease，并校验会话一致性；默认 lease 为 250 ms。mux 也对 Guard 状态执行 250 ms
 lease，Guard 消失时不允许后端持续发布的 Twist 保留导航权限。
+Host 选择 teleop/test/research，或固件由 PS2/ESP/DEBUG/LINE 等非 Host 来源接管时，
+Guard 撤权并取消旧 Goal。回中或松手只恢复新目标准入，不恢复旧 Goal；后端终止
+结果未到达时仍禁止新 Goal，终止后必须由操作者提交新的 UUID。
 `formal_odometry` 的 compatibility lease 默认同为 250 ms；恢复后需要当前会话的新
 wheel evidence 才能重新发布正式 odom/TF。这些时限不代表实测物理停车时间。
 # Bridge command decision boundary

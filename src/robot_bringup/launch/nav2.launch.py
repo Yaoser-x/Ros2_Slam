@@ -20,6 +20,17 @@ class _BehaviorTreeParameters(RewrittenYaml):
         super().substitute_params(data, param_rewrites)
 
 
+def _action_endpoint_remaps(action_name):
+    # Humble needs endpoint remaps: https://github.com/ros2/ros2/issues/1312
+    return [
+        SetRemap(
+            src=f"{action_name}/_action/{endpoint}",
+            dst=f"nav2/{action_name}/_action/{endpoint}",
+        )
+        for endpoint in ("send_goal", "get_result", "cancel_goal", "feedback", "status")
+    ]
+
+
 def generate_launch_description():
     nav2_share = get_package_share_directory("nav2_bringup")
     rb_share = get_package_share_directory("robot_bringup")
@@ -49,6 +60,8 @@ def generate_launch_description():
                     SetRemap(src="/cmd_vel", dst=LaunchConfiguration("cmd_vel_topic")),
                     SetRemap(src="navigate_to_pose", dst="nav2/navigate_to_pose"),
                     SetRemap(src="navigate_through_poses", dst="nav2/navigate_through_poses"),
+                    *_action_endpoint_remaps("navigate_to_pose"),
+                    *_action_endpoint_remaps("navigate_through_poses"),
                     SetRemap(src="goal_pose", dst="nav2/goal_pose"),
                     IncludeLaunchDescription(
                         PythonLaunchDescriptionSource(

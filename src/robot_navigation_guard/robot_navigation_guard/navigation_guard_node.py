@@ -19,6 +19,7 @@ from robot_interfaces.msg import (
     ChassisLinkState,
     FirmwareControlState,
     HostControlState,
+    HostMotionCommand,
     MotionSupervisionState,
     NavigationGuardState,
     PlatformCompatibilityState,
@@ -174,7 +175,12 @@ class NavigationGuardNode(Node):
     def _on_firmware(self, msg) -> None:
         self.state_received_at["firmware"] = time.monotonic()
         self.firmware_session = int(msg.wire_session_id)
-        self.firmware_safe = not msg.estop_active and not msg.fault_stop_active
+        self.firmware_safe = bool(
+            not msg.estop_active
+            and not msg.fault_stop_active
+            # Upper v3 physical source: NONE=0, HOST=1; all others own manual control.
+            and msg.firmware_control_source in (0, 1)
+        )
         self._evaluate()
 
     def _on_supervision(self, msg) -> None:
@@ -207,8 +213,15 @@ class NavigationGuardNode(Node):
         # accepted public goal is the fresh intent that creates the next Host
         # command epoch.  All earlier quiet/wire gates remain closed.
         self.host_safe = bool(
-            msg.control_state == HostControlState.STATE_WAIT_FRESH_HOST_INTENT
-            or (msg.control_state == HostControlState.STATE_HOST_ACTIVE and not msg.rearm_required)
+            msg.selected_host_subsource
+            in (HostMotionCommand.HOST_SUBSOURCE_NONE, HostMotionCommand.HOST_SUBSOURCE_NAV)
+            and (
+                msg.control_state == HostControlState.STATE_WAIT_FRESH_HOST_INTENT
+                or (
+                    msg.control_state == HostControlState.STATE_HOST_ACTIVE
+                    and not msg.rearm_required
+                )
+            )
         )
         self._evaluate()
 

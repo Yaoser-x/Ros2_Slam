@@ -52,7 +52,7 @@ def spin_for(executor, duration):
         executor.spin_once(timeout_sec=0.01)
 
 
-def navigation(executor, nodes, *, pending_cancel=False):
+def navigation(executor, nodes, *, pending_cancel=False, takeover=None):
     guard, backend, fixture = NavigationGuardNode(), Node("backend"), Node("fixture")
     nodes.extend([guard, backend, fixture])
     finish = Future()
@@ -96,6 +96,7 @@ def navigation(executor, nodes, *, pending_cancel=False):
     ]
     publishers = [fixture.create_publisher(kind, topic, 10) for kind, topic in zip(types, topics)]
     publish_compatibility = [True]
+    firmware_source, host_subsource = [0], [HostMotionCommand.HOST_SUBSOURCE_NONE]
 
     def publish():
         link = ChassisLinkState()
@@ -103,13 +104,19 @@ def navigation(executor, nodes, *, pending_cancel=False):
         link.protocol_compatible, link.wire_session_id = True, 7
         firmware = FirmwareControlState()
         firmware.wire_session_id = 7
+        firmware.firmware_control_source = firmware_source[0]
         supervision = MotionSupervisionState()
         supervision.level, supervision.observation_session_id = supervision.LEVEL_NORMAL, 7
         compatibility = PlatformCompatibilityState()
         compatibility.permit_navigation = compatibility.observation_ready = True
         compatibility.wire_session_id = compatibility.observation_session_id = 7
         host = HostControlState()
-        host.control_state = host.STATE_WAIT_FRESH_HOST_INTENT
+        host.control_state = (
+            host.STATE_WAIT_FRESH_HOST_INTENT
+            if host_subsource[0] == HostMotionCommand.HOST_SUBSOURCE_NONE
+            else host.STATE_HOST_ACTIVE
+        )
+        host.selected_host_subsource = host_subsource[0]
         for index, message in enumerate([link, firmware, supervision, compatibility, host]):
             if index != 3 or publish_compatibility[0]:
                 message.header.stamp = fixture.get_clock().now().to_msg()
@@ -128,7 +135,12 @@ def navigation(executor, nodes, *, pending_cancel=False):
     spin_until(executor, lambda: bool(handles) and guard.backend_handle is not None)
     spin_for(executor, 0.1)
     assert not result.done() and guard.guard.active_uuid
-    publish_compatibility[0] = False
+    if takeover == "host":
+        host_subsource[0] = HostMotionCommand.HOST_SUBSOURCE_TELEOP
+    elif takeover == "firmware":
+        firmware_source[0] = 2  # Upper v3 PS2 source.
+    else:
+        publish_compatibility[0] = False
     if pending_cancel:
         spin_until(executor, lambda: cancel_calls[0] == 1)
         assert len(guard.backend._pending_cancel_requests) == 1
@@ -140,6 +152,7 @@ def navigation(executor, nodes, *, pending_cancel=False):
     spin_until(executor, lambda: guard.guard.cancel_pending and handles[0].is_cancel_requested)
     assert not result.done(), "cancel admission is not backend termination evidence"
     publish_compatibility[0] = True
+    firmware_source[0], host_subsource[0] = 0, HostMotionCommand.HOST_SUBSOURCE_NONE
     spin_for(executor, 0.05)
     second = client.send_goal_async(NavigateToPose.Goal())
     spin_until(executor, second.done)
@@ -149,6 +162,16 @@ def navigation(executor, nodes, *, pending_cancel=False):
     assert result.result().status == GoalStatus.STATUS_ABORTED
     assert guard.backend_handle is None and guard.run is None
     spin_until(executor, lambda: not guard.backend._pending_cancel_requests)
+    if takeover is not None:
+        spin_for(executor, 0.15)
+        assert len(handles) == 1, "neutral must not resume the canceled navigation goal"
+        fresh = client.send_goal_async(NavigateToPose.Goal())
+        spin_until(executor, fresh.done)
+        assert fresh.result().accepted, "a new explicit goal may recover after takeover"
+        fresh_result = fresh.result().get_result_async()
+        spin_until(executor, fresh_result.done)
+        assert fresh_result.result().status == GoalStatus.STATUS_SUCCEEDED
+        assert len(handles) == 2
     server.destroy()
     client.destroy()
     fixture.destroy_timer(timer)
@@ -156,6 +179,14 @@ def navigation(executor, nodes, *, pending_cancel=False):
 
 def navigation_cancel_pending(executor, nodes):
     navigation(executor, nodes, pending_cancel=True)
+
+
+def navigation_host_takeover(executor, nodes):
+    navigation(executor, nodes, takeover="host")
+
+
+def navigation_firmware_takeover(executor, nodes):
+    navigation(executor, nodes, takeover="firmware")
 
 
 def navigation_pose(executor, nodes):
