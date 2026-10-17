@@ -35,4 +35,5 @@ separate checks.
 ROS2 CI checks out that same locked SDK commit under `build/lidar-sdk`, applies
 the scan-framing patch, runs the regression, and archives the generated source
 and compile/run evidence. Vendor source and generated test binaries stay outside
-the tracked source tree.
+the tracked source tree. Generated regression source and its artifact directory
+retain the SDK source's original MIT copyright and permission notice.

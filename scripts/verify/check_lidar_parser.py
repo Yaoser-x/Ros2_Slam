@@ -11,6 +11,9 @@ parser.add_argument("source")
 parser.add_argument("output")
 args = parser.parse_args()
 source = Path(args.source).read_text(encoding="utf-8")
+upstream_notice, include_marker, _ = source.partition("#include")
+if not include_marker or "The MIT License" not in upstream_notice:
+    raise ValueError("locked SDK source must retain its upstream MIT notice")
 out = Path(args.output)
 out.mkdir(exist_ok=False)
 
@@ -133,7 +136,8 @@ int main() {
 }
 """
 code = (
-    prefix
+    upstream_notice
+    + prefix
     + "\n"
     + "\n".join(
         body(x)
@@ -147,6 +151,7 @@ code = (
     + suffix
 )
 (out / "parser_test.cpp").write_text(code, encoding="utf-8")
+(out / "upstream-notice.txt").write_text(upstream_notice, encoding="utf-8")
 compile_result = subprocess.run(
     [
         "g++",
