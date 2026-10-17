@@ -10,6 +10,8 @@ jobs:
   build-and-test:
     runs-on: ubuntu-22.04
     container: osrf/ros:humble-desktop
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
 
     steps:
       - name: Checkout
@@ -71,6 +73,7 @@ jobs:
           cmake -S firmware-contract/tests/host -B build/firmware-host
           cmake --build build/firmware-host --parallel 2
           ctest --test-dir build/firmware-host --output-on-failure
+          test -z "$(git -C firmware-contract status --porcelain --untracked-files=all)"
 
       - name: Linux software evidence with coverage
         run: |
