@@ -149,6 +149,17 @@ def test_ci_enforces_quality_and_module_coverage_thresholds() -> None:
     assert "--cov=src/robot_verification" in runner
 
 
+def test_ci_keeps_firmware_checkout_clean_and_preserves_software_evidence() -> None:
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["build-and-test"]["steps"]
+    host = next(step for step in steps if step.get("name") == "Firmware host contract tests")
+    assert "-B build/firmware-host" in host["run"]
+    assert "firmware-contract/build-host" not in host["run"]
+    evidence = next(step for step in steps if step.get("name") == "Preserve software evidence")
+    assert evidence["if"] == "always()"
+    assert "build/software-evidence/" in evidence["with"]["path"]
+
+
 def test_all_owned_ros_packages_are_versioned_v060() -> None:
     packages = sorted((ROOT / "src").glob("*/package.xml"))
     assert packages

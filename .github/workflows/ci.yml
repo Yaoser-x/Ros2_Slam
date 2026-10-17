@@ -68,9 +68,9 @@ jobs:
 
       - name: Firmware host contract tests
         run: |
-          cmake -S firmware-contract/tests/host -B firmware-contract/build-host
-          cmake --build firmware-contract/build-host --parallel 2
-          ctest --test-dir firmware-contract/build-host --output-on-failure
+          cmake -S firmware-contract/tests/host -B build/firmware-host
+          cmake --build build/firmware-host --parallel 2
+          ctest --test-dir build/firmware-host --output-on-failure
 
       - name: Linux software evidence with coverage
         run: |
@@ -90,3 +90,14 @@ jobs:
 
       - name: version and release consistency
         run: python3 scripts/verify/check_version_consistency.py
+
+      - name: Preserve software evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: software-evidence-${{ github.sha }}
+          if-no-files-found: warn
+          path: |
+            build/software-evidence/
+            coverage.json
+            coverage.xml
