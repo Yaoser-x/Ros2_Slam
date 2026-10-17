@@ -2,7 +2,7 @@ name: ROS2 CI
 
 on:
   push:
-    branches: [main, ARM]
+    branches: [main, ARM, "integration/**"]
   pull_request:
     branches: [main, ARM]
 

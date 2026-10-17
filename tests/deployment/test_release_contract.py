@@ -13,6 +13,18 @@ ROOT = Path(__file__).resolve().parents[2]
 FIRMWARE_COMMIT = "cf6cbde82e4750d848c9b2745f2dba4ba3ed40c3"
 
 
+def test_integration_push_runs_ci_against_locked_firmware():
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    triggers = workflow.get("on", workflow.get(True))
+    assert "integration/**" in triggers["push"]["branches"]
+    checkouts = [
+        step["with"]
+        for step in workflow["jobs"]["build-and-test"]["steps"]
+        if step.get("with", {}).get("repository") == "Yaoser-x/SlamRobot_Chassis_Control"
+    ]
+    assert len(checkouts) == 1 and checkouts[0]["ref"] == FIRMWARE_COMMIT
+
+
 @pytest.mark.parametrize(
     "key,value",
     [("firmware_commit", "0" * 40), ("hardware_revision", 0), ("firmware_parameter_crc32", 0)],
